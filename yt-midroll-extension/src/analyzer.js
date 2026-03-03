@@ -426,28 +426,46 @@ async function _doAnalyze() {
       }
     }
 
-    // Fallback: Якщо у вікні НІЧОГО немає, ми беремо першу найближчу доступну паузу ПІСЛЯ вікна!
-    // Це ГАРАНТУЄ, що ми не "проскочимо" кінець відео, якщо десь посередині був довгий уривок без тиші.
+    // Fallback 1: Якщо у вікні НІЧОГО немає, беремо найближчу доступну паузу, але не далі ніж +80% gap
     if (!bestPause) {
-      const fallback = sortedSilences.find(p => !usedPauses.has(p) && p.seconds >= (target - currentGap * 0.2));
-      if (fallback && fallback.seconds < duration - 15) {
+      const looseEnd = target + currentGap * 0.8;
+      const fallback = sortedSilences.find(p => !usedPauses.has(p) && p.seconds >= windowStart && p.seconds <= looseEnd);
+      if (fallback) {
         bestPause = fallback;
-      } else {
-        break; // До кінця відео немає жодної нормальної паузи
       }
     }
 
-    if (bestPause) {
-      // Перевіряємо щоб не ставити надто близько до попередньої
-      // (Це стосується здебільшого fallback вибору)
-      if (bestPause.seconds - playhead >= currentGap * 0.5) {
-        selectedCands.push(bestPause);
-        usedPauses.add(bestPause);
-        playhead = bestPause.seconds; // "Пересуваємо" лінійку до цієї знайденої паузи!
-      } else {
-        // Якщо fallback знайшов дуже близьку паузу (аномалія) — пропускаємо її
-        usedPauses.add(bestPause);
+    // Fallback 2: Жорсткий. Якщо блогер говорить безперервно і пауз немає взагалі,
+    // ми ПРИМУСОВО знаходимо найквітіший момент (вдих/міжслів'я) у нашому ідеальному вікні.
+    if (!bestPause) {
+      let localMinAmp = Infinity;
+      let localMinSec = target;
+
+      const startBlock = Math.max(0, Math.floor(windowStart / secPerBlock));
+      const endBlock = Math.min(totalBlocks - 1, Math.floor(windowEnd / secPerBlock));
+
+      for (let b = startBlock; b <= endBlock; b++) {
+        if (smoothed[b] < localMinAmp) {
+          localMinAmp = smoothed[b];
+          localMinSec = b * secPerBlock;
+        }
       }
+
+      bestPause = {
+        timecode: toTimecode(localMinSec),
+        seconds: +(localMinSec).toFixed(2),
+        duration_sec: 0.1, // Це штучна мітка
+        amplitude: +(localMinAmp).toFixed(4),
+        is_forced: true
+      };
+      log(`Немає тиші! Згенеровано примусову мітку на ${bestPause.timecode}`, 'warn');
+    }
+
+    // Додаємо відібрану або згенеровану паузу
+    if (bestPause && bestPause.seconds < duration - 15) {
+      selectedCands.push(bestPause);
+      if (!bestPause.is_forced) usedPauses.add(bestPause);
+      playhead = bestPause.seconds; // "Пересуваємо" лінійку до цієї знайденої паузи!
     } else {
       break;
     }
