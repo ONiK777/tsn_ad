@@ -1213,11 +1213,11 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     </div>
     <div id="mra-auto-sect">
       ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
-      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 90, 5, 600, 5))}
-      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 110, 5, 3600, 5))}
+      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 90, 1, 600, 1))}
+      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 110, 1, 3600, 1))}
     </div>
     <div id="mra-manual-sect" style="display:none">
-      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 110, 5, 7200, 5))}
+      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 110, 1, 7200, 1))}
     </div>
   </div>
 
@@ -1353,30 +1353,46 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
-    // Шукаємо всі кнопки видалення в редакторі
-    let deleteBtns = Array.from(document.querySelectorAll('ytve-ad-breaks-editor ytcp-icon-button, ytve-ad-breaks-editor button'))
-      .filter(btn => {
-        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-        const id = (btn.id || '').toLowerCase();
-        const classes = (btn.className || '').toLowerCase();
-        return label.includes('delete') || label.includes('видалити') || label.includes('удалить') ||
-          id.includes('delete') || classes.includes('delete');
-      })
-      .filter(b => b.offsetParent !== null); // тільки видимі елементи
+    // YouTube часто ховає ці кнопки глибоко. Шукаємо по всьому редактору, орієнтуючись на точний SVG-код смітника:
+    const svgPath = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
+
+    // Знаходимо всі кнопки в межах ytve-ad-breaks-editor
+    const allButtons = document.querySelectorAll('ytve-ad-breaks-editor ytcp-icon-button, ytve-ad-breaks-editor button, ytve-ad-breaks-editor [role="button"]');
+
+    let deleteBtns = [];
+
+    // Шукаємо кнопку, яка містить SVG смітника
+    allButtons.forEach(btn => {
+      // Кнопка має бути видимою і не заблокованою
+      if (btn.offsetParent !== null && !btn.disabled) {
+        // Забираємо всі пробіли для точного порівняння, бо React може форматувати по-різному
+        const html = btn.innerHTML.replace(/\s+/g, '');
+        const targetPathStr = svgPath.replace(/\s+/g, '');
+
+        if (html.includes(targetPathStr)) {
+          // Якщо це ytcp-icon-button, то краще клікати на його внутрішній button
+          const innerBtn = btn.querySelector('button');
+          deleteBtns.push(innerBtn || btn);
+        }
+      }
+    });
+
+    // Прибираємо можливі дублікати
+    deleteBtns = [...new Set(deleteBtns)];
 
     if (deleteBtns.length === 0) {
-      log('Не знайдено міток для видалення', 'warn');
-      updateStatus('Не знайдено міток на відео', 'info');
+      log('Не знайдено міток для видалення (або список вже порожній)', 'warn');
+      updateStatus('Не знайдено міток', 'warn');
       return;
     }
 
     log(`Видаляємо ${deleteBtns.length} міток з відео...`, 'info');
-    for (const btn of deleteBtns) {
-      btn.click();
-      await sleep(150); // Невелика затримка для стабільності
+    for (let i = deleteBtns.length - 1; i >= 0; i--) {
+      deleteBtns[i].click();
+      await sleep(150);
     }
 
-    updateStatus('✅ Всі мітки успішно видалено!', 'success');
+    updateStatus(`✅ Успішно видалено ${deleteBtns.length} міток!`, 'success');
   });
 
   // ── Мінімізувати та Закрити ──
