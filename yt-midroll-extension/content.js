@@ -724,15 +724,25 @@ async function analyzeWaveform() {
 
   // Жадібно вибираємо паузи з дотриманням gap
   for (const pause of sortedPauses) {
+    // Якщо увімкнено focusStart - збільшуємо відстань між рекламами 
+    // ближче до кінця відео. Так на початку вони будуть густо (наприклад, кожні 90с), 
+    // а в кінці дуже рідко (кожні 3-4 хвилини).
+    let currentGap = gap;
+    if (CONFIG.focusStart) {
+      const position = pause.seconds / duration; // 0..1
+      // gap на початку = 1x, в кінці = 3.5x
+      currentGap = gap * (1 + 2.5 * position);
+    }
+
     // Перевіряємо, чи не надто близько до вже обраних
-    const tooClose = selectedCands.some(sel => Math.abs(sel.seconds - pause.seconds) < gap);
+    const tooClose = selectedCands.some(sel => Math.abs(sel.seconds - pause.seconds) < currentGap);
 
     if (!tooClose) {
       selectedCands.push(pause);
     }
   }
 
-  log(`Автоматично відібрано ${selectedCands.length} позицій з gap ~${gap}с`, 'info');
+  log(`Автоматично відібрано ${selectedCands.length} позицій (початковий gap ~${gap}с)`, 'info');
 
   state.selected = selectedCands;
   state.selected.sort((a, b) => a.seconds - b.seconds);
@@ -1191,7 +1201,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   <div class="ms">
     <div class="mst">🔇 Де ставити рекламу</div>
-    ${row('Мін. тривалість паузи (с):', stepper('mra-min-silence', 1.5, 0.5, 30, 0.5))}
+    ${row('Мін. тривалість паузи (с):', stepper('mra-min-silence', 1.5, 0.1, 30, 0.1))}
     ${row('Поріг тиші (%):', stepper('mra-threshold', 15, 1, 50, 1), '% від максимуму (↓ = більше пауз)')}
   </div>
 
@@ -1203,11 +1213,11 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     </div>
     <div id="mra-auto-sect">
       ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
-      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 90, 10, 600, 10))}
-      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 110, 10, 3600, 10))}
+      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 90, 5, 600, 5))}
+      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 110, 5, 3600, 5))}
     </div>
     <div id="mra-manual-sect" style="display:none">
-      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 110, 10, 7200, 10))}
+      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 110, 5, 7200, 5))}
     </div>
   </div>
 
