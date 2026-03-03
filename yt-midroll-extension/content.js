@@ -98,7 +98,7 @@ window.addEventListener('message', function (event) {
 
       state.waveformUrl = url;
       log('Перехоплено URL вейвформи: ' + url.substring(0, 100) + '...', 'success');
-      updateStatus('✅ API перехоплено! Натисніть "Аналізувати".', 'success');
+      updateStatus('✅ Натисніть "Аналізувати"', 'success');
     }
   } catch (error) {
     log('Помилка обробки повідомлення: ' + error.message, 'error');
@@ -1109,14 +1109,14 @@ function row(label, ctrl, hint = '') {
 function stepper(id, val, min, max, step) {
   return `<div class="stp" data-id="${id}" data-val="${val}" data-min="${min}" data-max="${max}" data-step="${step}">
     <button class="mcb stp-m">−</button>
-    <span class="stp-v">${val}</span>
+    <input type="text" class="stp-v" value="${val}" spellcheck="false" title="Натисніть щоб ввести значення вручну">
     <button class="mcb stp-p">+</button>
   </div>`;
 }
 
 function getVal(id) {
   const el = document.querySelector(`.stp[data-id="${id}"] .stp-v`);
-  return el ? parseFloat(el.textContent) : null;
+  return el ? parseFloat(el.value) : null;
 }
 
 // ─── UI ПАНЕЛЬ ────────────────────────────────────────────────────────────────
@@ -1144,8 +1144,9 @@ function createPanel() {
 .mcnt,.stp{display:flex;align-items:center;gap:4px}
 .mcb{width:22px;height:22px;background:#222;border:1px solid #444;color:#e0e0e0;border-radius:4px;cursor:pointer;font-size:14px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:0.1s;}
 .mcb:hover{background:#c91c1c;color:#fff;border-color:#c91c1c}
-#mra-count,.stp-v{min-width:38px;text-align:center;color:#fff;font-size:13px;font-weight:900;background:#1a1a1a;border:1px solid #444;border-radius:4px;padding:2px 6px}
-#mra-count{color:#c91c1c;font-size:15px}
+#mra-count,.stp-v{width:46px;text-align:center;color:#fff;font-size:13px;font-weight:900;background:#1a1a1a;border:1px solid #444;border-radius:4px;padding:2px 0;cursor:text;transition:0.2s;user-select:text;-webkit-user-select:text;}
+.stp-v:focus{outline:none;border-color:#c91c1c;background:#222;box-shadow:0 0 4px rgba(201,28,28,0.5)}
+#mra-count{color:#c91c1c;font-size:15px;width:auto;min-width:38px;padding:2px 6px;}
 .mtw{display:flex;align-items:center;gap:6px;margin-bottom:5px}
 .mt{position:relative;width:32px;height:17px;display:inline-block}
 .mt input{opacity:0;width:0;height:0}
@@ -1263,15 +1264,44 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     const maxVal = parseFloat(stp.dataset.max);
     const step = parseFloat(stp.dataset.step);
 
+    const updateVal = (newValStr) => {
+      let next = parseFloat(newValStr);
+      if (isNaN(next)) next = parseFloat(stp.dataset.val);
+      if (next < minVal) next = minVal;
+      if (next > maxVal) next = maxVal;
+      valEl.value = Math.round(next * 1000) / 1000;
+      triggerAutoAnalyze();
+    };
+
     stp.querySelector('.stp-m').addEventListener('click', () => {
-      const cur = parseFloat(valEl.textContent);
-      const next = Math.round((cur - step) * 1000) / 1000;
-      if (next >= minVal) { valEl.textContent = next; triggerAutoAnalyze(); }
+      const cur = parseFloat(valEl.value) || parseFloat(stp.dataset.val);
+      updateVal(cur - step);
     });
     stp.querySelector('.stp-p').addEventListener('click', () => {
-      const cur = parseFloat(valEl.textContent);
-      const next = Math.round((cur + step) * 1000) / 1000;
-      if (next <= maxVal) { valEl.textContent = next; triggerAutoAnalyze(); }
+      const cur = parseFloat(valEl.value) || parseFloat(stp.dataset.val);
+      updateVal(cur + step);
+    });
+
+    // Ручне введення
+    valEl.addEventListener('blur', () => {
+      updateVal(valEl.value);
+    });
+
+    // Блокуємо перехоплення клавіш YouTube-ом (пробіл, цифри стрілки тощо)
+    const stopKeys = (e) => { e.stopPropagation(); };
+    valEl.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // Не даємо ютубу реагувати на клавіші
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        valEl.blur();
+      }
+    });
+    valEl.addEventListener('keyup', stopKeys);
+    valEl.addEventListener('keypress', stopKeys);
+
+    // Виділяємо текст при кліку для зручності
+    valEl.addEventListener('focus', () => {
+      setTimeout(() => valEl.select(), 10);
     });
   });
 
@@ -1445,7 +1475,7 @@ function init() {
     if (isAdBreaksPage && !document.getElementById('mra-panel') && !isPanelClosedByUser) {
       createPanel();
       updateStatus(
-        state.waveformUrl ? '✅ API перехоплено! Натисніть "Аналізувати".' : '⏳ Очікуємо завантаження вейвформи...',
+        state.waveformUrl ? '✅ Натисніть "Аналізувати"' : '⏳ Очікуємо завантаження відео...',
         state.waveformUrl ? 'success' : 'info'
       );
     } else if (!isAdBreaksPage && document.getElementById('mra-panel')) {
