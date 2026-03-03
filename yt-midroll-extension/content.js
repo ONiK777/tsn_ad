@@ -1168,8 +1168,9 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   <div class="ms">
     <div class="mst">📊 Основне</div>
-    <div style="color:#ffffff;font-size:11px;padding:4px 0;font-weight:600;opacity:0.9;">
-      Авто-режим: ставимо рекламу скільки можна через 1.5-2 хв
+    <div style="color:#ffffff;font-size:11px;padding:4px 0;font-weight:600;opacity:0.9;text-align:center;">
+      ✨ Авто-режим
+      <div style="margin-top:4px;font-weight:400;opacity:0.8;">ставимо рекламу скільки можна через 1.5-2 хв</div>
     </div>
   </div>
 
