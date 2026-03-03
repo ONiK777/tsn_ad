@@ -390,8 +390,9 @@ async function _doAnalyze() {
     if (CONFIG.focusStart) {
       const aPosition = a.seconds / duration;
       const bPosition = b.seconds / duration;
-      const aBoost = 1 + (4 * Math.pow(1 - aPosition, 2));
-      const bBoost = 1 + (4 * Math.pow(1 - bPosition, 2));
+      // М'якший буст: початок відео x2.5, кінець x1 (раніше було x5, через що кінець ігнорувався)
+      const aBoost = 1 + (1.5 * Math.pow(1 - aPosition, 2));
+      const bBoost = 1 + (1.5 * Math.pow(1 - bPosition, 2));
       return (b.score * bBoost) - (a.score * aBoost);
     }
     return b.score - a.score;
@@ -402,7 +403,8 @@ async function _doAnalyze() {
     let currentGap = gap;
     if (CONFIG.focusStart) {
       const position = pause.seconds / duration;
-      currentGap = gap * (0.5 + position);
+      // На початку трохи густіше (0.7 від норми), в кінці - стандартна норма (1.0)
+      currentGap = gap * (0.7 + (position * 0.3));
     }
 
     const tooClose = selectedCands.some(sel => Math.abs(sel.seconds - pause.seconds) < currentGap);
