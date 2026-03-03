@@ -381,47 +381,43 @@ async function _doAnalyze() {
 
   // ── Рівномірний відбір пауз по всьому відео (Гарантована реклама в кінці) ──
   const selectedCands = [];
-
-  // Крок 1: Будуємо "ідеальні" точки для реклами по всьому відео (навіть в кінці)
-  let idealPoints = [];
-  let currentTarget = gap;
-  // Якщо focusStart, перші точки ідуть частіше
-  if (CONFIG.focusStart && duration > gap * 2) {
-    currentTarget = gap * 0.7; // перша марка швидше
-  }
-
-  while (currentTarget < duration - 10) { // Не ставимо в самі останні 10 секунд
-    idealPoints.push(currentTarget);
-
-    let nextGap = gap;
-    if (CONFIG.focusStart) {
-      // Плавно збільшуємо gap від 0.7 до 1.0 залежно від позиції
-      const pos = currentTarget / duration;
-      nextGap = gap * (0.7 + (pos * 0.3));
-    }
-    currentTarget += nextGap;
-  }
-
-  // Крок 2: Для кожної "ідеальної" точки шукаємо найкращу реальну паузу поруч
-  // Шукаємо в діапазоні [-gap/2.5 ... +gap/2.5]
   const usedPauses = new Set();
 
-  for (const ideal of idealPoints) {
+  // Сортуємо сирі паузи за часом для послідовного пошуку
+  const sortedSilences = [...rawSilences].sort((a, b) => a.seconds - b.seconds);
+
+  let playhead = 0; // Позиція останньої доданої реклами (або 0)
+
+  while (true) {
+    let currentGap = gap;
+    if (CONFIG.focusStart) {
+      const pos = playhead / duration;
+      // На початку трохи густіше (gap * 0.7), в кінці - стандартна норма (gap * 1.0)
+      currentGap = gap * (0.7 + (pos * 0.3));
+    }
+
+    let target = playhead + currentGap;
+
+    // Не ставимо рекламу в самі останні 15 секунд відео
+    if (target > duration - 15) break;
+
+    // Вікно пошуку навколо ідеальної цілі [-40% ... +40% gap]
+    const windowStart = target - (currentGap * 0.4);
+    const windowEnd = target + (currentGap * 0.4);
+
     let bestPause = null;
     let bestScore = -Infinity;
 
-    // Скільки секунд можна відступити вліво чи вправо від ідеальної точки
-    const windowSec = gap / 2.2;
-
-    for (const p of rawSilences) {
+    for (const p of sortedSilences) {
       if (usedPauses.has(p)) continue;
 
-      const distance = Math.abs(p.seconds - ideal);
+      // Якщо пауза потрапляє у "вікно"
+      if (p.seconds >= windowStart && p.seconds <= windowEnd) {
+        const distance = Math.abs(p.seconds - target);
+        const distancePenalty = Math.pow(distance / (currentGap * 0.4), 2);
 
-      if (distance <= windowSec) {
-        // Ми в межах вікна. Рахуємо якість (чим довша пауза і ближче до ідеалу - тим краще)
-        // Score = Тривалість_паузи - (Амплітуда * 10) - (Відстань_до_ідеалу / 5)
-        const score = p.duration_sec - (p.amplitude * 10) - Math.pow(distance / (windowSec / 2), 2);
+        // Оцінюємо якість (довша = краще, гучніша = гірше, дальша від центру = гірше)
+        const score = p.duration_sec * 2 - (p.amplitude * 20) - distancePenalty;
 
         if (score > bestScore) {
           bestScore = score;
@@ -430,19 +426,34 @@ async function _doAnalyze() {
       }
     }
 
-    if (bestPause) {
-      // Перевіряємо чи не занадто близько до попередньої доданої
-      const lastAdded = selectedCands.length > 0 ? selectedCands[selectedCands.length - 1] : null;
-      let minAllowedGap = gap * 0.55; // Ніколи не ставимо ближче ніж половина gap
+    // Fallback: Якщо у вікні НІЧОГО немає, ми беремо першу найближчу доступну паузу ПІСЛЯ вікна!
+    // Це ГАРАНТУЄ, що ми не "проскочимо" кінець відео, якщо десь посередині був довгий уривок без тиші.
+    if (!bestPause) {
+      const fallback = sortedSilences.find(p => !usedPauses.has(p) && p.seconds >= (target - currentGap * 0.2));
+      if (fallback && fallback.seconds < duration - 15) {
+        bestPause = fallback;
+      } else {
+        break; // До кінця відео немає жодної нормальної паузи
+      }
+    }
 
-      if (!lastAdded || (bestPause.seconds - lastAdded.seconds >= minAllowedGap)) {
+    if (bestPause) {
+      // Перевіряємо щоб не ставити надто близько до попередньої
+      // (Це стосується здебільшого fallback вибору)
+      if (bestPause.seconds - playhead >= currentGap * 0.5) {
         selectedCands.push(bestPause);
         usedPauses.add(bestPause);
+        playhead = bestPause.seconds; // "Пересуваємо" лінійку до цієї знайденої паузи!
+      } else {
+        // Якщо fallback знайшов дуже близьку паузу (аномалія) — пропускаємо її
+        usedPauses.add(bestPause);
       }
+    } else {
+      break;
     }
   }
 
-  log(`Автоматично відібрано ${selectedCands.length} позицій (таргет gap ~${gap}с)`, 'info');
+  log(`Автоматично відібрано ${selectedCands.length} позицій (playhead gap ~${gap}с)`, 'info');
 
   state.selected = selectedCands;
   state.selected.sort((a, b) => a.seconds - b.seconds);
