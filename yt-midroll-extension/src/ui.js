@@ -391,6 +391,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   document.getElementById('mra-close').addEventListener('click', () => {
     isPanelClosedByUser = true;
     panel.style.display = 'none';
+    createReopenButton();
   });
 
   // ── Перезавантаження ──
@@ -427,4 +428,38 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   addTrackedEventListener(document, 'mousemove', onMouseMove);
   addTrackedEventListener(document, 'mouseup', onMouseUp);
+}
+
+function createReopenButton() {
+  if (document.getElementById('mra-reopen-btn')) return;
+  const btn = document.createElement('button');
+  btn.id = 'mra-reopen-btn';
+  btn.innerHTML = '⚡ Відкрити ТСН АвтоРеклама';
+  btn.style.cssText = `
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 10000;
+    background: #e63946;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-family: 'YouTube Noto', Roboto, Arial, sans-serif;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    transition: 0.2s;
+  `;
+  btn.onmouseover = () => { btn.style.transform = 'scale(1.05)'; btn.style.background = '#ff4d5a'; };
+  btn.onmouseout = () => { btn.style.transform = 'scale(1)'; btn.style.background = '#e63946'; };
+
+  btn.addEventListener('click', () => {
+    isPanelClosedByUser = false;
+    btn.remove();
+    // MutationObserver відразу помітить isPanelClosedByUser = false і створить нову панель
+  });
+
+  document.body.appendChild(btn);
 }

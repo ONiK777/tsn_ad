@@ -17,13 +17,22 @@ async function init() {
 
       if (isAdBreaksPage && !document.getElementById('mra-panel') && !isPanelClosedByUser) {
         createPanel();
+        const reopenBtn = document.getElementById('mra-reopen-btn');
+        if (reopenBtn) reopenBtn.remove();
+
         updateStatus(
           state.waveformUrl ? '✅ Натисніть "Аналізувати"' : '⏳ Очікуємо завантаження відео...',
           state.waveformUrl ? 'success' : 'info'
         );
-      } else if (!isAdBreaksPage && document.getElementById('mra-panel')) {
+      } else if (isAdBreaksPage && isPanelClosedByUser) {
+        if (!document.getElementById('mra-reopen-btn')) {
+          createReopenButton();
+        }
+      } else if (!isAdBreaksPage) {
         const panel = document.getElementById('mra-panel');
         if (panel) panel.remove();
+        const btn = document.getElementById('mra-reopen-btn');
+        if (btn) btn.remove();
       }
     }, 200);
   });
