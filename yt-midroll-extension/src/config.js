@@ -1,10 +1,10 @@
 // ─── КОНФІГ ──────────────────────────────────────────────────────────────────
 var CONFIG = {
   autoGap: true,
-  minGapSec: 90,
+  minGapSec: 180,
   shortVideoCutoff: 600,
-  longVideoGapSec: 110,
-  shortVideoGapSec: 90,
+  longVideoGapSec: 180,
+  shortVideoGapSec: 60,
   minSilenceSec: 1.5,
   silenceThresholdPct: 15,
   focusStart: true,
