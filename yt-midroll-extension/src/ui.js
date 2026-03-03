@@ -390,7 +390,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   document.getElementById('mra-close').addEventListener('click', () => {
     isPanelClosedByUser = true;
-    panel.style.display = 'none';
+    panel.remove();
     createReopenButton();
   });
 
