@@ -182,3 +182,22 @@ function loadSettings() {
     }
   });
 }
+
+function resetSettings() {
+  const defaults = {
+    autoGap: true,
+    minGapSec: 90,
+    shortVideoCutoff: 600,
+    longVideoGapSec: 110,
+    shortVideoGapSec: 90,
+    minSilenceSec: 1.5,
+    silenceThresholdPct: 15,
+    focusStart: true,
+    actionDelay: 700,
+  };
+  Object.assign(CONFIG, defaults);
+  try {
+    chrome.storage.local.remove('mraSettings');
+  } catch (e) { /* ignore */ }
+  log('Налаштування скинуто до заводських', 'info');
+}

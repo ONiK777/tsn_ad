@@ -396,7 +396,8 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   // ── Перезавантаження ──
   document.getElementById('mra-reload').addEventListener('click', () => {
-    log('♻️ Перезавантаження розширення...', 'info');
+    log('♻️ Перезавантаження розширення та скидання налаштувань...', 'info');
+    resetSettings();
     state.cachedAudioBuffer = null;
     state.cachedAudioUrl = null;
     state.waveformData = null;
