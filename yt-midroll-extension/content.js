@@ -2,12 +2,13 @@
 
 // ─── КОНФІГ (defaults, overridden by UI) ─────────────────────────────────────
 const CONFIG = {
-  targetAdsCount: 20,
+  autoPlacement: true,     // НОВИЙ: автоматично розміщувати, скільки можна
   autoGap: true,
-  minGapSec: 110,
+  minGapSec: 90,          // Мінімум 1.5 хв між рекламами
+  maxGapSec: 120,         // Максимум 2 хв між рекламами
   shortVideoCutoff: 600,   // < 10 хв = "коротке"
-  longVideoGapSec: 110,    // ОНОВЛЕНО: 110 сек (майже 2 хв)
-  shortVideoGapSec: 90,    // 90 сек
+  longVideoGapSec: 110,    // 110 сек для довгих відео
+  shortVideoGapSec: 90,    // 90 сек для коротких
   minSilenceSec: 1.5,
   maxSilenceSec: 10.0,
   silenceThresholdPct: 15,
@@ -28,6 +29,45 @@ let state = {
 
 let isPanelClosedByUser = false;
 
+// ─── CLEANUP ─────────────────────────────────────────────────────────────────
+let activeObservers = [];
+let activeEventListeners = [];
+let domCache = new WeakMap(); // Кеш для DOM елементів
+
+// Хелпер для додавання event listener з автоматичним трекінгом
+function addTrackedEventListener(element, event, handler, options = false) {
+  if (!element) return;
+
+  element.addEventListener(event, handler, options);
+  activeEventListeners.push({ element, event, handler, options });
+}
+
+function cleanup() {
+  // Відключаємо всі observers
+  activeObservers.forEach(obs => {
+    try { obs.disconnect(); } catch (e) { /* ignore */ }
+  });
+  activeObservers = [];
+
+  // Видаляємо всі event listeners
+  activeEventListeners.forEach(({ element, event, handler, options }) => {
+    try {
+      if (element && element.removeEventListener) {
+        element.removeEventListener(event, handler, options);
+      }
+    } catch (e) { /* ignore */ }
+  });
+  activeEventListeners = [];
+
+  // Очищаємо кеші
+  domCache = new WeakMap();
+  if (typeof domCacheWithTTL !== 'undefined') {
+    domCacheWithTTL.clear();
+  }
+
+  log('♻️ Cleanup виконано', 'info');
+}
+
 // ─── ПЕРЕХОПЛЕННЯ API ЧЕРЕЗ INJECT.JS ────────────────────────────────────────
 function injectScript() {
   const script = document.createElement('script');
@@ -46,25 +86,71 @@ if (document.head || document.documentElement) {
 }
 
 window.addEventListener('message', function (event) {
-  if (event.source === window && event.data && event.data.type === 'MRA_WAVEFORM_URL') {
-    state.waveformUrl = event.data.url;
-    log('Перехоплено URL вейвформи', 'success');
-    updateStatus('✅ API перехоплено! Натисніть "Аналізувати".', 'success');
+  try {
+    if (event.source === window && event.data && event.data.type === 'MRA_WAVEFORM_URL') {
+      const url = event.data.url;
+
+      // Базова валідація URL
+      if (!url || typeof url !== 'string') {
+        log('⚠️ Некоректний URL вейвформи', 'warn');
+        return;
+      }
+
+      state.waveformUrl = url;
+      log('Перехоплено URL вейвформи: ' + url.substring(0, 100) + '...', 'success');
+      updateStatus('✅ API перехоплено! Натисніть "Аналізувати".', 'success');
+    }
+  } catch (error) {
+    log('Помилка обробки повідомлення: ' + error.message, 'error');
   }
 });
 
 // ─── УТИЛІТИ ─────────────────────────────────────────────────────────────────
-function sleep(ms) { return new Promise(r => setTimeout(r, ms + Math.random() * 200)); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Валідація числових значень
+function isValidNumber(value) {
+  return typeof value === 'number' && isFinite(value) && !isNaN(value) && value > 0;
+}
+
+// Валідація URL
+function isValidUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const parsedUrl = new URL(url);
+    // Перевіряємо, що це HTTPS і домен YouTube
+    return parsedUrl.protocol === 'https:' && parsedUrl.hostname.includes('youtube.com');
+  } catch {
+    return false;
+  }
+}
 
 function waitForElement(selector, timeout = 10000, interval = 100) {
   return new Promise((resolve, reject) => {
     const t0 = Date.now();
+    let timerId = null;
+
     const check = () => {
-      const el = typeof selector === 'function' ? selector() : document.querySelector(selector);
-      if (el) return resolve(el);
-      if (Date.now() - t0 >= timeout) return reject(new Error(`Елемент не знайдено за ${timeout}мс`));
-      setTimeout(check, interval);
+      try {
+        const el = typeof selector === 'function' ? selector() : document.querySelector(selector);
+        if (el) {
+          if (timerId) clearTimeout(timerId);
+          return resolve(el);
+        }
+
+        const elapsed = Date.now() - t0;
+        if (elapsed >= timeout) {
+          if (timerId) clearTimeout(timerId);
+          return reject(new Error(`Елемент не знайдено за ${timeout}мс`));
+        }
+
+        timerId = setTimeout(check, interval);
+      } catch (error) {
+        if (timerId) clearTimeout(timerId);
+        reject(error);
+      }
     };
+
     check();
   });
 }
@@ -74,24 +160,72 @@ function log(msg, type = 'info') {
   console.log(`%c🎬 [MRA] ${msg}`, `color:${c[type] || c.info}`);
 }
 
-function findInsertAdBreakButton() {
-  for (const sel of ['button[aria-label*="ad break"]', 'ytcp-button[aria-label*="ad break"]', '#insert-ad-break-button', 'ytcp-button.insert-ad-break-button', 'ytve-ad-breaks-editor button']) {
-    const b = document.querySelector(sel); if (b) return b;
+// Кеш для DOM елементів з TTL (time-to-live)
+const domCacheWithTTL = {
+  cache: new Map(),
+  TTL: 5000, // 5 секунд кеш
+
+  set(key, value) {
+    this.cache.set(key, { value, timestamp: Date.now() });
+  },
+
+  get(key) {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+
+    // Перевіряємо, чи не застарів кеш
+    if (Date.now() - cached.timestamp > this.TTL) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    // Перевіряємо, чи елемент все ще в DOM
+    if (cached.value && !document.contains(cached.value)) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return cached.value;
+  },
+
+  clear() {
+    this.cache.clear();
   }
+};
+
+function findInsertAdBreakButton() {
+  const cacheKey = 'insertAdBreakButton';
+  const cached = domCacheWithTTL.get(cacheKey);
+  if (cached) return cached;
+
+  for (const sel of ['button[aria-label*="ad break"]', 'ytcp-button[aria-label*="ad break"]', '#insert-ad-break-button', 'ytcp-button.insert-ad-break-button', 'ytve-ad-breaks-editor button']) {
+    const b = document.querySelector(sel);
+    if (b) {
+      domCacheWithTTL.set(cacheKey, b);
+      return b;
+    }
+  }
+
   for (const btn of document.querySelectorAll('button, ytcp-button')) {
     const t = btn.textContent?.toLowerCase() || '';
-    if (['insert ad break', 'вставити рекламне', 'вставить рекламу', 'ad-unterbrechung', 'insertar pausa'].some(v => t.includes(v))) return btn;
+    if (['insert ad break', 'вставити рекламне', 'вставить рекламу', 'ad-unterbrechung', 'insertar pausa'].some(v => t.includes(v))) {
+      domCacheWithTTL.set(cacheKey, btn);
+      return btn;
+    }
   }
+
   return null;
 }
 
 function findTimestampInput() {
+  // Не кешуємо input, бо він динамічно створюється для кожної вставки
   return document.querySelector('input.ytcp-media-timestamp-input') ||
     document.querySelector('input[type="text"][placeholder*="00:00"]') ||
     [...document.querySelectorAll('input[type="text"]')].find(el => el.className.includes('timestamp') || el.className.includes('time-input'));
 }
 
 function findConfirmButton() {
+  // Не кешуємо confirm, бо він в динамічному діалозі
   for (const btn of document.querySelectorAll('ytcp-dialog button, .ytcp-dialog button')) {
     const t = btn.textContent?.toLowerCase() || '';
     if (['insert', 'вставити', 'ok', 'confirm', 'підтвердити'].some(v => t.includes(v))) return btn;
@@ -138,16 +272,41 @@ function updateProgress(cur, total) {
 
 // ─── ЧИТАННЯ НАЛАШТУВАНЬ З ПАНЕЛІ ────────────────────────────────────────────
 function readSettings() {
-  CONFIG.targetAdsCount = parseInt(document.getElementById('mra-count')?.textContent) || 3;
-  CONFIG.minSilenceSec = getVal('mra-min-silence') ?? 3.0;
-  CONFIG.maxSilenceSec = getVal('mra-max-silence') ?? 10.0;
-  CONFIG.silenceThresholdPct = getVal('mra-threshold') ?? 15;
-  CONFIG.focusStart = document.getElementById('mra-focus-start')?.checked ?? true;
-  CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
-  CONFIG.minGapSec = getVal('mra-min-gap') ?? 180;
-  CONFIG.shortVideoCutoff = (getVal('mra-cutoff') ?? 10) * 60;
-  CONFIG.longVideoGapSec = getVal('mra-long-gap') ?? 180;
-  CONFIG.shortVideoGapSec = getVal('mra-short-gap') ?? 60;
+  try {
+    // Валідація та обмеження значень
+    const clamp = (val, min, max, defaultVal) => {
+      const num = parseFloat(val);
+      if (isNaN(num) || !isFinite(num)) return defaultVal;
+      return Math.max(min, Math.min(max, num));
+    };
+
+    const clampInt = (val, min, max, defaultVal) => {
+      const num = parseInt(val);
+      if (isNaN(num) || !isFinite(num)) return defaultVal;
+      return Math.max(min, Math.min(max, num));
+    };
+
+    CONFIG.minSilenceSec = clamp(getVal('mra-min-silence'), 0.5, 30, 1.5);
+    CONFIG.maxSilenceSec = clamp(getVal('mra-max-silence'), 1, 60, 10.0);
+    CONFIG.silenceThresholdPct = clamp(getVal('mra-threshold'), 1, 50, 15);
+
+    CONFIG.focusStart = document.getElementById('mra-focus-start')?.checked ?? true;
+    CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
+
+    CONFIG.minGapSec = clamp(getVal('mra-min-gap'), 10, 7200, 180);
+    CONFIG.shortVideoCutoff = clamp(getVal('mra-cutoff'), 1, 120, 10) * 60;
+    CONFIG.longVideoGapSec = clamp(getVal('mra-long-gap'), 10, 3600, 180);
+    CONFIG.shortVideoGapSec = clamp(getVal('mra-short-gap'), 10, 600, 60);
+
+    // Логічна перевірка: maxSilence має бути >= minSilence
+    if (CONFIG.maxSilenceSec < CONFIG.minSilenceSec) {
+      CONFIG.maxSilenceSec = CONFIG.minSilenceSec;
+    }
+
+    log(`Налаштування: gap=${CONFIG.autoGap ? 'auto' : CONFIG.minGapSec + 's'}`, 'info');
+  } catch (error) {
+    log('⚠️ Помилка читання налаштувань, використовуємо defaults: ' + error.message, 'warn');
+  }
 }
 
 // ─── АНАЛІЗ АУДІО ────────────────────────────────────────────────────────────
@@ -156,21 +315,31 @@ function readSettings() {
 function detectAndParseSamples(buffer, duration) {
   const totalBytes = buffer.byteLength;
 
+  if (totalBytes === 0) {
+    throw new Error('Порожній буфер даних вейвформи');
+  }
+
   // YouTube зазвичай віддає Uint8Array (0-255 амплітудна огинаюча)
   const u8 = new Uint8Array(buffer);
 
   // Перевіримо, чи це натомість справжній Float32
-  // Якщо це справжні флоати (Float32), там будуть адекватні значення ~ 0.01 - 1.0. 
-  // Якщо ж це байти (Uint8), які МИ прочитаємо як Float32, то 99% з них будуть 
-  // або "сміттям" або мікроскопічними числами на кшталт 1.4e-40 (бо байти маленькі), і багато нулів
+  // Перевіряємо КОЖЕН 3-й семпл (а не кожен 10-й) для більшої точності
   const f32 = new Float32Array(buffer);
   let validFloats = 0;
-  for (let i = 0; i < f32.length; i += 10) {
+  const sampleStep = 3; // Краща точність детектування
+  const samplesToCheck = Math.floor(f32.length / sampleStep);
+
+  for (let i = 0; i < f32.length; i += sampleStep) {
     const v = Math.abs(f32[i]);
+    // Перевіряємо діапазон типових аудіо значень
     if (v > 0.0001 && v < 2.0) validFloats++;
   }
-  // Якщо хоча б 5% чисел схожі на нормальний аудіо-флоат (не тиша і не сміття)
-  const isFloat32 = (validFloats > f32.length / 50);
+
+  // Підвищений поріг: якщо хоча б 10% чисел схожі на нормальний аудіо-флоат
+  const validFloatRatio = validFloats / samplesToCheck;
+  const isFloat32 = validFloatRatio > 0.10;
+
+  console.log(`🔍 Детектування формату: перевірено ${samplesToCheck} семплів, валідних: ${validFloats} (${(validFloatRatio * 100).toFixed(1)}%)`);
 
   let samples, fmt, totalSamples;
   if (isFloat32) {
@@ -251,22 +420,84 @@ async function analyzeWaveform() {
     return false;
   }
 
+  // Валідація URL
+  if (!isValidUrl(state.waveformUrl)) {
+    updateStatus('❌ Неприпустимий URL вейвформи!', 'error');
+    log('Некоректний URL: ' + state.waveformUrl, 'error');
+    return false;
+  }
+
   readSettings();
   const video = document.querySelector('video');
-  if (!video) throw new Error('Відео не знайдено');
+  if (!video) {
+    updateStatus('❌ Відео не знайдено на сторінці', 'error');
+    return false;
+  }
+
   const duration = video.duration;
 
+  // Валідація тривалості відео
+  if (!isValidNumber(duration)) {
+    updateStatus('❌ Некоректна тривалість відео (NaN/Infinity/0)', 'error');
+    log(`Некоректна тривалість: ${duration}. Можливо, відео ще завантажується.`, 'error');
+    return false;
+  }
+
+  if (duration < 60) {
+    updateStatus('⚠️ Відео занадто коротке (< 1 хв) для реклами', 'warn');
+    return false;
+  }
+
   let buffer;
-  if (state.cachedAudioUrl === state.waveformUrl && state.cachedAudioBuffer) {
-    updateStatus('⚡ Швидкий перерахунок (використовуємо кеш аудіо)...', 'info');
-    buffer = state.cachedAudioBuffer;
-  } else {
-    updateStatus('⬇️ Завантажуємо вейвформу...', 'info');
-    const response = await fetch(state.waveformUrl, { credentials: 'include' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    buffer = await response.arrayBuffer();
-    state.cachedAudioUrl = state.waveformUrl;
-    state.cachedAudioBuffer = buffer;
+  try {
+    if (state.cachedAudioUrl === state.waveformUrl && state.cachedAudioBuffer) {
+      updateStatus('⚡ Швидкий перерахунок (використовуємо кеш аудіо)...', 'info');
+      buffer = state.cachedAudioBuffer;
+    } else {
+      updateStatus('⬇️ Завантажуємо вейвформу...', 'info');
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 сек таймаут
+
+      try {
+        const response = await fetch(state.waveformUrl, {
+          credentials: 'include',
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP помилка: ${response.status} ${response.statusText}`);
+        }
+
+        const contentLength = response.headers.get('content-length');
+        if (contentLength && parseInt(contentLength) === 0) {
+          throw new Error('Порожній файл вейвформи');
+        }
+
+        buffer = await response.arrayBuffer();
+
+        if (!buffer || buffer.byteLength === 0) {
+          throw new Error('Отримано порожній буфер');
+        }
+
+        state.cachedAudioUrl = state.waveformUrl;
+        state.cachedAudioBuffer = buffer;
+
+        log(`Завантажено ${(buffer.byteLength / 1024).toFixed(1)} KB`, 'success');
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Таймаут завантаження вейвформи (>30с)');
+        }
+        throw fetchError;
+      }
+    }
+  } catch (error) {
+    updateStatus(`❌ Помилка завантаження: ${error.message}`, 'error');
+    log('Деталі помилки: ' + error.stack, 'error');
+    return false;
   }
 
   const { samples, fmt, secPerSample, equivalentSampleRate, avgAbs } = detectAndParseSamples(buffer, duration);
@@ -316,29 +547,67 @@ async function analyzeWaveform() {
   log(`Огинаюча: ${totalBlocks} блоків, ${secPerBlock.toFixed(3)}с/блок, згладж. ±${smBlocks}бл, fmt=${fmt}`, 'info');
 
   // ── Глобальний пошук справжніх пауз ──────────────────────────────────────────
-  // 1. Повертаємо мін. паузу, щоб шукати справжні розриви в розмові.
-  // 2. Поріг тиші (silenceThresholdPct) — це процент ВІД СЕРЕДНЬОЇ ГУЧНОСТІ. 
-  // Наприклад 30% означає: все, що тихіше за 30% середнього — це тиша.
-  const count = CONFIG.targetAdsCount;
+  // НОВА ЛОГІКА: не фіксована кількість, а ставимо скільки можна через gap
   const gap = CONFIG.autoGap
     ? (duration < CONFIG.shortVideoCutoff ? CONFIG.shortVideoGapSec : CONFIG.longVideoGapSec)
     : CONFIG.minGapSec;
 
   // ВИПРАВЛЕННЯ: Тепер поріг рахується через ПЕРЦЕНТИЛЬ, а не відсоток від максимуму чи середнього!
-  // Це найефективніший спосіб: ми сортуємо всю гучність, і якщо поріг = 15%, 
-  // то лише 15% найтихіших моментів у ВСЬОМУ ВІДЕО будуть вважатися "тишею".
+  // Оптимізовано: замість повного сортування використовуємо вибіркове сортування (QuickSelect)
   let maxAmp = -Infinity;
   for (let i = 0; i < totalBlocks; i++) {
     if (smoothed[i] > maxAmp) maxAmp = smoothed[i];
   }
 
-  const sortedAmps = Array.from(smoothed).sort((a, b) => a - b);
-  const p10 = sortedAmps[Math.floor(totalBlocks * 0.10)];
-  const p50 = sortedAmps[Math.floor(totalBlocks * 0.50)];
+  // Оптимізована функція для обчислення перцентилів без повного сортування
+  function getPercentile(arr, percentile) {
+    if (arr.length === 0) return 0;
+    if (percentile <= 0) return arr[0];
+    if (percentile >= 1) return arr[arr.length - 1];
+
+    // Для малих масивів (<1000) просто сортуємо
+    if (arr.length < 1000) {
+      const sorted = Array.from(arr).sort((a, b) => a - b);
+      const idx = Math.floor(arr.length * percentile);
+      return sorted[idx];
+    }
+
+    // Для великих масивів - вибіркове обчислення через bucket sort
+    // Знаходимо мін/макс
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] < min) min = arr[i];
+      if (arr[i] > max) max = arr[i];
+    }
+
+    // Створюємо 1000 бакетів
+    const bucketCount = 1000;
+    const buckets = new Array(bucketCount).fill(0);
+    const bucketSize = (max - min) / bucketCount;
+
+    for (let i = 0; i < arr.length; i++) {
+      const bucketIdx = Math.min(bucketCount - 1, Math.floor((arr[i] - min) / bucketSize));
+      buckets[bucketIdx]++;
+    }
+
+    // Знаходимо перцентиль
+    const targetCount = Math.floor(arr.length * percentile);
+    let count = 0;
+    for (let i = 0; i < bucketCount; i++) {
+      count += buckets[i];
+      if (count >= targetCount) {
+        return min + (i + 0.5) * bucketSize; // Середина бакету
+      }
+    }
+    return max;
+  }
+
+  const p10 = getPercentile(smoothed, 0.10);
+  const p50 = getPercentile(smoothed, 0.50);
 
   // Перцентиль! Якщо користувач обрав 15% у налаштуваннях — беремо 15-й перцентиль.
-  const pctIndex = Math.floor(totalBlocks * Math.max(0.01, Math.min(0.99, CONFIG.silenceThresholdPct / 100)));
-  const GLOBAL_THRESHOLD = sortedAmps[pctIndex];
+  const percentileValue = Math.max(0.01, Math.min(0.99, CONFIG.silenceThresholdPct / 100));
+  const GLOBAL_THRESHOLD = getPercentile(smoothed, percentileValue);
 
   console.group('%c🔍 АНАЛІЗ ПОРОГІВ (Перцентиль)', 'color:#ffd166;font-weight:bold');
   console.log(`  Max амплітуда:     ${maxAmp.toFixed(4)}`);
@@ -371,8 +640,9 @@ async function analyzeWaveform() {
           if (smoothed[j] < minAmp) { minAmp = smoothed[j]; }
         }
 
-        // Ставимо мітку на ПОЧАТКУ паузи + 0.5с (стабільніше, одразу після слова)
-        const markSec = currentSilenceStart * secPerBlock + 0.5;
+        // Ставимо мітку ПО ЦЕНТРУ паузи (найкраща позиція)
+        const pauseCenter = (currentSilenceStart + (b - currentSilenceStart) / 2) * secPerBlock;
+        const markSec = pauseCenter;
 
         // ІГНОРУВАТИ початок відео (перші 10 секунд - там ніколи немає пауз)
         if (markSec < 10) {
@@ -401,9 +671,10 @@ async function analyzeWaveform() {
 
       // ІГНОРУВАТИ початок відео
       if (markSec >= 10) {
+        const pauseCenter = (currentSilenceStart + (totalBlocks - currentSilenceStart) / 2) * secPerBlock;
         rawSilences.push({
-          timecode: toTimecode(markSec),
-          seconds: +markSec.toFixed(2),
+          timecode: toTimecode(pauseCenter),
+          seconds: +pauseCenter.toFixed(2),
           duration_sec: +silenceSecs.toFixed(1),
           amplitude: 0
         });
@@ -427,67 +698,34 @@ async function analyzeWaveform() {
     console.log(`  🔇 = знайдена пауза | ░ = тихо | █ = гучно\n`);
   }
 
+  // НОВИЙ АЛГОРИТМ: Ставимо СКІЛЬКИ МОЖНА пауз з gap 1.5-2 хв
   const selectedCands = [];
 
-  if (CONFIG.focusStart) {
-    // ЖАДІБНИЙ АЛГОРИТМ З ПРІОРИТЕТОМ НА ПОЧАТОК
-    // Гарантує, що мітки будуть масово скупчуватись на початку відео в рамках дозволеного Gap.
-    let candsFocus = rawSilences.map(s => {
-      let score = s.duration_sec / ((s.amplitude || 0) + 0.01);
-      // Квадратичний множник: на самому початку відео цінність паузи зростає до x3 разів
-      score *= (1 + 2 * Math.pow(1 - s.seconds / duration, 2));
-      return { ...s, score };
-    });
-
-    // Сортуємо за фінальним накрученим скором
-    candsFocus.sort((a, b) => b.score - a.score);
-
-    for (const c of candsFocus) {
-      if (selectedCands.length >= count) break;
-      // ЖОРСТКА ВІДСТАНЬ: Ніяк не дозволяємо ставити мітки ближче, ніж вказаний GAP
-      // Це гарантує стабільні 1.5-2 хв між усіма рекламами.
-      let currentGap = gap;
-      if (!selectedCands.some(sel => Math.abs(sel.seconds - c.seconds) < currentGap)) {
-        selectedCands.push(c);
-      }
+  // Сортуємо паузи за якістю (тривалість / амплітуда)
+  const sortedPauses = rawSilences.map(s => ({
+    ...s,
+    score: s.duration_sec / ((s.amplitude || 0) + 0.01)
+  })).sort((a, b) => {
+    // Пріоритет на початок відео, якщо focusStart
+    if (CONFIG.focusStart) {
+      const aBoost = 1 + (1 - a.seconds / duration);
+      const bBoost = 1 + (1 - b.seconds / duration);
+      return (b.score * bBoost) - (a.score * aBoost);
     }
-  } else {
-    // КЛАСИЧНИЙ РІВНОМІРНИЙ РОЗПОДІЛ
-    const cands = rawSilences.map(s => ({ ...s, score: s.duration_sec / ((s.amplitude || 0) + 0.01) }));
-    const segDur = duration / (count + 1);
+    return b.score - a.score;
+  });
 
-    for (let i = 1; i <= count; i++) {
-      let idealSec = duration * (i / (count + 1));
-      let bestMatch = null;
-      let bestScore = -Infinity;
+  // Жадібно вибираємо паузи з дотриманням gap
+  for (const pause of sortedPauses) {
+    // Перевіряємо, чи не надто близько до вже обраних
+    const tooClose = selectedCands.some(sel => Math.abs(sel.seconds - pause.seconds) < gap);
 
-      for (const c of cands) {
-        if (selectedCands.some(sel => Math.abs(sel.seconds - c.seconds) < gap)) continue;
-        const diff = Math.abs(c.seconds - idealSec);
-        const timeDiffPenalty = Math.max(0, diff - (segDur * 0.15)) * 0.15;
-        const compoundScore = c.score - timeDiffPenalty;
-
-        if (diff > (segDur * 0.5) && c.duration_sec < 5) continue;
-
-        if (compoundScore > bestScore) {
-          bestScore = compoundScore;
-          bestMatch = c;
-        }
-      }
-
-      if (bestMatch) selectedCands.push(bestMatch);
-    }
-
-    if (selectedCands.length < count) {
-      cands.sort((a, b) => b.score - a.score);
-      for (const c of cands) {
-        if (selectedCands.length >= count) break;
-        if (!selectedCands.some(sel => Math.abs(sel.seconds - c.seconds) < gap)) {
-          selectedCands.push(c);
-        }
-      }
+    if (!tooClose) {
+      selectedCands.push(pause);
     }
   }
+
+  log(`Автоматично відібрано ${selectedCands.length} позицій з gap ~${gap}с`, 'info');
 
   state.selected = selectedCands;
   state.selected.sort((a, b) => a.seconds - b.seconds);
@@ -500,10 +738,10 @@ async function analyzeWaveform() {
     console.log('  ⚠️ Не вдалось знайти підходящих пауз з таким інтервалом та параметрами!');
   console.groupEnd();
 
-  log(`Відібрано ${state.selected.length}/${count} рекламних місць (gap=${gap}с)`, state.selected.length > 0 ? 'success' : 'warn');
+  log(`Відібрано ${state.selected.length} рекламних місць (gap=${gap}с)`, state.selected.length > 0 ? 'success' : 'warn');
   updateStatus(
     state.selected.length > 0
-      ? `✅ ${state.selected.length}/${count} місць знайдено (≥${CONFIG.minSilenceSec || 3}с тиші)`
+      ? `✅ ${state.selected.length} позицій знайдено через ~${gap}с`
       : `⚠️ 0 місць! Зменш "Мін. паузу" або збільш "Поріг"`,
     state.selected.length > 0 ? 'success' : 'warn'
   );
@@ -547,6 +785,10 @@ function renderSelectedList() {
 }
 
 // ─── ВІЗУАЛІЗАЦІЯ ВЕЙВФОРМИ ───────────────────────────────────────────────────
+// Кеш для офскрін canvas (оптимізація)
+let offscreenCanvas = null;
+let lastRenderSignature = null;
+
 function renderWaveform() {
   const canvas = document.getElementById('mra-waveform');
   const section = document.getElementById('mra-waveform-section');
@@ -560,52 +802,78 @@ function renderWaveform() {
   if (section) section.style.display = '';
 
   const { smoothed, duration, totalBlocks, threshold } = state.waveformData;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false }); // Оптимізація: вимикаємо alpha
   const w = canvas.width;
   const h = canvas.height;
 
-  // Очистити canvas
-  ctx.fillStyle = '#111111';
-  ctx.fillRect(0, 0, w, h);
+  // Створюємо сигнатуру для перевірки, чи потрібно перерисовувати
+  const signature = `${totalBlocks}_${threshold}_${state.selected.length}`;
 
-  // Намалювати вейвформу
-  const step = Math.max(1, Math.ceil(totalBlocks / w));
-  const maxAmp = Math.max(...smoothed);
+  // Перевіряємо, чи змінились дані
+  const needsRedraw = lastRenderSignature !== signature;
 
-  for (let x = 0; x < w; x++) {
-    const blockIdx = Math.floor(x * step);
-    if (blockIdx >= totalBlocks) break;
+  if (needsRedraw) {
+    // Створюємо офскрін canvas для фонового малюнку (вейвформа + поріг)
+    if (!offscreenCanvas) {
+      offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = w;
+      offscreenCanvas.height = h;
+    }
 
-    const amp = smoothed[blockIdx];
-    const normalizedAmp = amp / maxAmp;
-    const barHeight = normalizedAmp * h * 0.8;
+    const offCtx = offscreenCanvas.getContext('2d', { alpha: false });
 
-    // Колір залежить від гучності
-    const isQuiet = amp < threshold;
-    ctx.fillStyle = isQuiet ? '#222222' : '#888888';
+    // Очистити
+    offCtx.fillStyle = '#111111';
+    offCtx.fillRect(0, 0, w, h);
 
-    const barY = (h - barHeight) / 2;
-    ctx.fillRect(x, barY, 1, barHeight);
+    // Намалювати вейвформу
+    const step = Math.max(1, Math.ceil(totalBlocks / w));
+    const maxAmp = Math.max(...smoothed);
+
+    for (let x = 0; x < w; x++) {
+      const blockIdx = Math.floor(x * step);
+      if (blockIdx >= totalBlocks) break;
+
+      const amp = smoothed[blockIdx];
+      const normalizedAmp = amp / maxAmp;
+      const barHeight = normalizedAmp * h * 0.8;
+
+      // Колір залежить від гучності
+      const isQuiet = amp < threshold;
+      offCtx.fillStyle = isQuiet ? '#222222' : '#888888';
+
+      const barY = (h - barHeight) / 2;
+      offCtx.fillRect(x, barY, 1, barHeight);
+    }
+
+    // Намалювати лінію порогу тиші
+    const thresholdY = h - (threshold / maxAmp * h * 0.8);
+    offCtx.strokeStyle = '#555555';
+    offCtx.setLineDash([2, 5]);
+    offCtx.beginPath();
+    offCtx.moveTo(0, thresholdY);
+    offCtx.lineTo(w, thresholdY);
+    offCtx.stroke();
+    offCtx.setLineDash([]);
+
+    // Намалювати всі знайдені паузи
+    offCtx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+    state.silences.forEach(s => {
+      const x = (s.seconds / duration) * w;
+      offCtx.fillRect(x - 1, 0, 2, h);
+    });
   }
 
-  // Намалювати лінію порогу тиші
-  const thresholdY = h - (threshold / maxAmp * h * 0.8);
-  ctx.strokeStyle = '#555555';
-  ctx.setLineDash([2, 5]);
-  ctx.beginPath();
-  ctx.moveTo(0, thresholdY);
-  ctx.lineTo(w, thresholdY);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Копіюємо офскрін canvas на видимий
+  if (offscreenCanvas) {
+    ctx.drawImage(offscreenCanvas, 0, 0);
+  } else {
+    // Fallback: якщо офскрін не створено, очищаємо
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(0, 0, w, h);
+  }
 
-  // Намалювати всі знайдені паузи (темні напівпрозорі зони)
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-  state.silences.forEach(s => {
-    const x = (s.seconds / duration) * w;
-    ctx.fillRect(x - 1, 0, 2, h);
-  });
-
-  // Намалювати відібрані паузи (яскраві ТОВСТІ маркери)
+  // Намалювати відібрані паузи (яскраві ТОВСТІ маркери) - завжди поверх
   state.selected.forEach((s, i) => {
     const x = (s.seconds / duration) * w;
     const isManual = s.manual;
@@ -619,7 +887,7 @@ function renderWaveform() {
     ctx.stroke();
 
     // Номер мітки
-    ctx.fillStyle = isManual ? '#ffffff' : '#ff0000';
+    ctx.fillStyle = isManual ? '#ffffff' : 'rgba(201, 28, 28, 1)';
     ctx.font = 'bold 11px Arial';
     const label = isManual ? `✋${i + 1}` : (i + 1).toString();
     ctx.fillText(label, x + 4, 12);
@@ -636,7 +904,10 @@ function renderWaveform() {
     ctx.fillText(timeStr, x, h - 2);
   }
 
-  log('Вейвформа оновлена', 'info');
+  // Оновлюємо сигнатуру
+  lastRenderSignature = signature;
+
+  log('Вейвформа оновлена' + (needsRedraw ? ' (повний рендер)' : ' (швидкий)'), 'info');
 }
 
 // ─── АВТОВСТАВКА ─────────────────────────────────────────────────────────────
@@ -654,15 +925,8 @@ async function insertTimecodes() {
     log(`[${idx + 1}/${silences.length}] Вставка: ${s.timecode}`, 'info');
 
     try {
-      // ХИТРІСТЬ: Спочатку пересуваємо "головку" плеєра на потрібний час.
-      // Тоді YouTube автоматично створить мітку саме в цьому місці, а не на початку 00:00:00
-      const video = document.querySelector('video');
-      if (video) {
-        video.currentTime = s.seconds;
-        video.dispatchEvent(new Event('timeupdate', { bubbles: true }));
-        video.dispatchEvent(new Event('seeked', { bubbles: true }));
-        await sleep(300); // Даємо компонентам YouTube час оновити UI на новий таймкод
-      }
+      // ВИПРАВЛЕННЯ: НЕ пересуваємо відео перед кліком, бо це створює 00:00:00
+      // Натомість одразу клікаємо і швидко вводимо правильний таймкод
 
       const inputsBefore = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
 
@@ -671,20 +935,50 @@ async function insertTimecodes() {
       btn.click();
       await sleep(CONFIG.actionDelay);
 
-      // ВИПРАВЛЕННЯ 00:00:00 - шукаємо ТІЛЬКИ ЩО доданий рядок (через активний елемент або різницю DOM)
+      // ВИПРАВЛЕННЯ 00:00:00 - покращений пошук з адаптивним таймаутом
       let input = null;
-      for (let attempts = 0; attempts < 15; attempts++) {
+      const maxAttempts = 20; // Збільшено кількість спроб
+      const baseDelay = 150; // Базова затримка
+
+      for (let attempts = 0; attempts < maxAttempts; attempts++) {
+        // Стратегія 1: Перевіряємо активний елемент (найшвидший спосіб)
         const activeEl = document.activeElement;
-        if (activeEl && activeEl.tagName === 'INPUT' && (activeEl.classList.contains('ytcp-media-timestamp-input') || activeEl.placeholder?.includes('00:00'))) {
+        if (activeEl && activeEl.tagName === 'INPUT' &&
+          (activeEl.classList.contains('ytcp-media-timestamp-input') || activeEl.placeholder?.includes('00:00'))) {
           input = activeEl;
+          log(`✅ Знайдено input через activeElement (спроба ${attempts + 1})`, 'success');
           break;
         }
 
+        // Стратегія 2: Порівнюємо DOM до/після
         const inputsAfter = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
-        const newInputs = inputsAfter.filter(el => !inputsBefore.includes(el) && (el.classList.contains('ytcp-media-timestamp-input') || el.placeholder?.includes('00:00')));
-        if (newInputs.length > 0) { input = newInputs[0]; break; }
+        const newInputs = inputsAfter.filter(el =>
+          !inputsBefore.includes(el) &&
+          (el.classList.contains('ytcp-media-timestamp-input') || el.placeholder?.includes('00:00'))
+        );
 
-        await sleep(200);
+        if (newInputs.length > 0) {
+          input = newInputs[0];
+          log(`✅ Знайдено input через DOM diff (спроба ${attempts + 1})`, 'success');
+          break;
+        }
+
+        // Стратегія 3: Шукаємо по видимості (останній input, який visible)
+        if (attempts > 5) {
+          const allTimeInputs = inputsAfter.filter(inp =>
+            inp.offsetParent !== null && // Елемент видимий
+            (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00'))
+          );
+          if (allTimeInputs.length > 0) {
+            input = allTimeInputs[allTimeInputs.length - 1];
+            log(`⚠️ Використано fallback: останній видимий input (спроба ${attempts + 1})`, 'warn');
+            break;
+          }
+        }
+
+        // Адаптивна затримка: збільшуємо час очікування на повільних системах
+        const delay = baseDelay + (attempts * 20);
+        await sleep(delay);
       }
 
       if (!input) {
@@ -707,7 +1001,36 @@ async function insertTimecodes() {
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8, bubbles: true }));
         await sleep(50);
 
-        document.execCommand('insertText', false, s.timecode);
+        // Замінено застарілий execCommand на сучасний InputEvent
+        try {
+          // Спроба 1: Використання InputEvent (сучасний стандарт)
+          const inputEvent = new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: s.timecode
+          });
+
+          if (!input.dispatchEvent(inputEvent)) {
+            // Якщо подія скасована, fallback на прямий setter
+            throw new Error('beforeinput cancelled');
+          }
+
+          // Встановлюємо значення напряму
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          nativeSetter.call(input, s.timecode);
+
+          // Dispatch події input та change
+          input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: s.timecode }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (err) {
+          // Fallback: якщо нові методи не працюють, використовуємо старий execCommand
+          log('⚠️ Fallback на execCommand: ' + err.message, 'warn');
+          if (document.execCommand) {
+            document.execCommand('insertText', false, s.timecode);
+          }
+        }
+
         await sleep(400); // Даємо час React "перетравити" події
       };
 
@@ -845,15 +1168,8 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   <div class="ms">
     <div class="mst">📊 Основне</div>
-    <div class="mr">
-      <span class="ml">К-сть реклам:</span>
-      <span class="mc">
-        <div class="mcnt">
-          <button class="mcb" id="mra-count-dec">−</button>
-          <span id="mra-count">20</span>
-          <button class="mcb" id="mra-count-inc">+</button>
-        </div>
-      </span>
+    <div style="color:#06d6a0;font-size:11px;padding:4px 0;">
+      ✨ Авто-режим: ставимо рекламу скільки можна через 1.5-2 хв
     </div>
   </div>
 
@@ -937,16 +1253,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     });
   });
 
-  // ── Лічильник реклам (без обмеження зверху) ──
-  const countEl = document.getElementById('mra-count');
-  document.getElementById('mra-count-dec').addEventListener('click', () => {
-    const v = parseInt(countEl.textContent) || 3;
-    if (v > 1) { countEl.textContent = v - 1; triggerAutoAnalyze(); }
-  });
-  document.getElementById('mra-count-inc').addEventListener('click', () => {
-    countEl.textContent = (parseInt(countEl.textContent) || 3) + 1;
-    triggerAutoAnalyze();
-  });
+  // Лічильник реклам видалено - тепер автоматичний режим
 
   // ── Тогл авто-gap ──
   const autoGapCb = document.getElementById('mra-auto-gap');
@@ -1067,6 +1374,9 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
 // ─── ІНІЦІАЛІЗАЦІЯ ────────────────────────────────────────────────────────────
 function init() {
+  // Спочатку очищаємо попередні ресурси
+  cleanup();
+
   const observer = new MutationObserver(() => {
     const isAdBreaksPage =
       document.querySelector('ytve-ad-breaks-editor') ||
@@ -1079,12 +1389,22 @@ function init() {
         state.waveformUrl ? '✅ API перехоплено! Натисніть "Аналізувати".' : '⏳ Очікуємо завантаження вейвформи...',
         state.waveformUrl ? 'success' : 'info'
       );
+    } else if (!isAdBreaksPage && document.getElementById('mra-panel')) {
+      // Видаляємо панель, якщо користувач покинув сторінку ad_breaks
+      const panel = document.getElementById('mra-panel');
+      if (panel) panel.remove();
     }
   });
 
+  // Додаємо observer до списку активних
+  activeObservers.push(observer);
+
   const startObserving = () => {
-    if (document.body) observer.observe(document.body, { childList: true, subtree: true });
-    else setTimeout(startObserving, 100);
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    } else {
+      setTimeout(startObserving, 100);
+    }
   };
   startObserving();
 }
