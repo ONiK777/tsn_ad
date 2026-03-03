@@ -379,41 +379,70 @@ async function _doAnalyze() {
     console.log(`  🔇 = знайдена пауза | ░ = тихо | █ = гучно\n`);
   }
 
-  // ── Відбір пауз з дотриманням gap ──
+  // ── Рівномірний відбір пауз по всьому відео (Гарантована реклама в кінці) ──
   const selectedCands = [];
 
-  // Сортуємо паузи за якістю
-  const sortedPauses = rawSilences.map(s => ({
-    ...s,
-    score: s.duration_sec / ((s.amplitude || 0) + 0.01)
-  })).sort((a, b) => {
-    if (CONFIG.focusStart) {
-      const aPosition = a.seconds / duration;
-      const bPosition = b.seconds / duration;
-      // М'якший буст: початок відео x2.5, кінець x1 (раніше було x5, через що кінець ігнорувався)
-      const aBoost = 1 + (1.5 * Math.pow(1 - aPosition, 2));
-      const bBoost = 1 + (1.5 * Math.pow(1 - bPosition, 2));
-      return (b.score * bBoost) - (a.score * aBoost);
-    }
-    return b.score - a.score;
-  });
+  // Крок 1: Будуємо "ідеальні" точки для реклами по всьому відео (навіть в кінці)
+  let idealPoints = [];
+  let currentTarget = gap;
+  // Якщо focusStart, перші точки ідуть частіше
+  if (CONFIG.focusStart && duration > gap * 2) {
+    currentTarget = gap * 0.7; // перша марка швидше
+  }
 
-  // Жадібно вибираємо паузи з дотриманням gap
-  for (const pause of sortedPauses) {
-    let currentGap = gap;
+  while (currentTarget < duration - 10) { // Не ставимо в самі останні 10 секунд
+    idealPoints.push(currentTarget);
+
+    let nextGap = gap;
     if (CONFIG.focusStart) {
-      const position = pause.seconds / duration;
-      // На початку трохи густіше (0.7 від норми), в кінці - стандартна норма (1.0)
-      currentGap = gap * (0.7 + (position * 0.3));
+      // Плавно збільшуємо gap від 0.7 до 1.0 залежно від позиції
+      const pos = currentTarget / duration;
+      nextGap = gap * (0.7 + (pos * 0.3));
+    }
+    currentTarget += nextGap;
+  }
+
+  // Крок 2: Для кожної "ідеальної" точки шукаємо найкращу реальну паузу поруч
+  // Шукаємо в діапазоні [-gap/2.5 ... +gap/2.5]
+  const usedPauses = new Set();
+
+  for (const ideal of idealPoints) {
+    let bestPause = null;
+    let bestScore = -Infinity;
+
+    // Скільки секунд можна відступити вліво чи вправо від ідеальної точки
+    const windowSec = gap / 2.2;
+
+    for (const p of rawSilences) {
+      if (usedPauses.has(p)) continue;
+
+      const distance = Math.abs(p.seconds - ideal);
+
+      if (distance <= windowSec) {
+        // Ми в межах вікна. Рахуємо якість (чим довша пауза і ближче до ідеалу - тим краще)
+        // Score = Тривалість_паузи - (Амплітуда * 10) - (Відстань_до_ідеалу / 5)
+        const score = p.duration_sec - (p.amplitude * 10) - Math.pow(distance / (windowSec / 2), 2);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestPause = p;
+        }
+      }
     }
 
-    const tooClose = selectedCands.some(sel => Math.abs(sel.seconds - pause.seconds) < currentGap);
-    if (!tooClose) {
-      selectedCands.push(pause);
+    if (bestPause) {
+      // Перевіряємо чи не занадто близько до попередньої доданої
+      const lastAdded = selectedCands.length > 0 ? selectedCands[selectedCands.length - 1] : null;
+      let minAllowedGap = gap * 0.55; // Ніколи не ставимо ближче ніж половина gap
+
+      if (!lastAdded || (bestPause.seconds - lastAdded.seconds >= minAllowedGap)) {
+        selectedCands.push(bestPause);
+        usedPauses.add(bestPause);
+      }
     }
   }
 
-  log(`Автоматично відібрано ${selectedCands.length} позицій (початковий gap ~${gap}с)`, 'info');
+  log(`Автоматично відібрано ${selectedCands.length} позицій (таргет gap ~${gap}с)`, 'info');
 
   state.selected = selectedCands;
   state.selected.sort((a, b) => a.seconds - b.seconds);
