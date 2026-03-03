@@ -724,14 +724,13 @@ async function analyzeWaveform() {
 
   // Жадібно вибираємо паузи з дотриманням gap
   for (const pause of sortedPauses) {
-    // Якщо увімкнено focusStart - збільшуємо відстань між рекламами 
-    // ближче до кінця відео. Так на початку вони будуть густо (наприклад, кожні 90с), 
-    // а в кінці дуже рідко (кожні 3-4 хвилини).
+    // Якщо увімкнено focusStart - робимо агресивний зсув quảng cáo на початок
+    // Для цього ми ДОЗВОЛЯЄМО ставити мітки ближче на початку (наприклад, gap/2)
+    // А в кінці відео розтягуємо відстань (до gap*1.5)
     let currentGap = gap;
     if (CONFIG.focusStart) {
       const position = pause.seconds / duration; // 0..1
-      // gap на початку = 1x, в кінці = 3.5x
-      currentGap = gap * (1 + 2.5 * position);
+      currentGap = gap * (0.5 + position);
     }
 
     // Перевіряємо, чи не надто близько до вже обраних
@@ -1353,27 +1352,18 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
-    // YouTube часто ховає ці кнопки глибоко. Шукаємо по всьому редактору, орієнтуючись на точний SVG-код смітника:
-    const svgPath = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
-
-    // Знаходимо всі кнопки в межах ytve-ad-breaks-editor
-    const allButtons = document.querySelectorAll('ytve-ad-breaks-editor ytcp-icon-button, ytve-ad-breaks-editor button, ytve-ad-breaks-editor [role="button"]');
+    // Найкращий спосіб: знаходимо саме ВЕКТОР смітника, а потім клікаємо його батьківську кнопку
+    const trashPath = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
+    const svgs = document.querySelectorAll(`path[d="${trashPath}"]`);
 
     let deleteBtns = [];
-
-    // Шукаємо кнопку, яка містить SVG смітника
-    allButtons.forEach(btn => {
-      // Кнопка має бути видимою і не заблокованою
-      if (btn.offsetParent !== null && !btn.disabled) {
-        // Забираємо всі пробіли для точного порівняння, бо React може форматувати по-різному
-        const html = btn.innerHTML.replace(/\s+/g, '');
-        const targetPathStr = svgPath.replace(/\s+/g, '');
-
-        if (html.includes(targetPathStr)) {
-          // Якщо це ytcp-icon-button, то краще клікати на його внутрішній button
-          const innerBtn = btn.querySelector('button');
-          deleteBtns.push(innerBtn || btn);
-        }
+    svgs.forEach(path => {
+      // Піднімаємося до кнопки
+      let btn = path.closest('ytcp-icon-button') || path.closest('button') || path.closest('[role="button"]');
+      if (btn && btn.offsetParent !== null && !btn.disabled) {
+        // Якщо це ytcp-icon-button, то краще клікати на його внутрішній button
+        const innerBtn = btn.querySelector('button');
+        deleteBtns.push(innerBtn || btn);
       }
     });
 
