@@ -25,7 +25,13 @@
         "https://studio.youtube.com/*"
       ],
       "js": [
-        "content.js"
+        "src/config.js",
+        "src/utils.js",
+        "src/analyzer.js",
+        "src/render.js",
+        "src/injector.js",
+        "src/ui.js",
+        "src/init.js"
       ],
       "run_at": "document_start"
     }
