@@ -186,9 +186,9 @@ function loadSettings() {
 function resetSettings() {
   const defaults = {
     autoGap: true,
-    minGapSec: 180,
+    minGapSec: 120,
     shortVideoCutoff: 600,
-    longVideoGapSec: 180,
+    longVideoGapSec: 120,
     shortVideoGapSec: 60,
     minSilenceSec: 1.5,
     silenceThresholdPct: 15,

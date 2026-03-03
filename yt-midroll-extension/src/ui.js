@@ -134,11 +134,11 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     </div>
     <div id="mra-auto-sect">
       ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
-      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 90, 1, 600, 1))}
-      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 110, 1, 3600, 1))}
+      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 60, 1, 600, 1))}
+      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 120, 1, 3600, 1))}
     </div>
     <div id="mra-manual-sect" style="display:none">
-      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 110, 1, 7200, 1))}
+      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 120, 1, 7200, 1))}
     </div>
   </div>
 
