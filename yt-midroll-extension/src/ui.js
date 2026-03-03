@@ -405,7 +405,8 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     lastRenderSignature = null;
     isPanelClosedByUser = false;
     panel.remove();
-    setTimeout(init, 300);
+    // НЕ викликаємо init(), бо він додасть ще один observer
+    // Існуючий observer сам побачить, що панелі нема і перемалює її
   });
 
   // ── Drag (з трекінгом для cleanup) ──
