@@ -212,7 +212,16 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     let holdTimer = null;
     let intervalTimer = null;
 
+    const stopHold = () => {
+      clearTimeout(holdTimer);
+      clearInterval(intervalTimer);
+      holdTimer = null;
+      intervalTimer = null;
+    };
+
     const startHold = (isPlus) => {
+      stopHold(); // Очищаємо попередні таймери перед зачаттям нового
+
       const dir = isPlus ? 1 : -1;
       let cur = parseFloat(valEl.value) || parseFloat(stp.dataset.val);
       updateVal(cur + (step * dir));
@@ -225,20 +234,30 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       }, 400);
     };
 
-    const stopHold = () => {
-      clearTimeout(holdTimer);
-      clearInterval(intervalTimer);
-    };
-
     const btnM = stp.querySelector('.stp-m');
     const btnP = stp.querySelector('.stp-p');
 
-    btnM.addEventListener('mousedown', () => startHold(false));
-    btnP.addEventListener('mousedown', () => startHold(true));
-    // Трекаємо window-рівневі слухачі для очистки
+    const attachPointerEvents = (btn, isPlus) => {
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return; // Тільки лівий клік
+        e.preventDefault();
+        btn.setPointerCapture(e.pointerId);
+        startHold(isPlus);
+      });
+      btn.addEventListener('pointerup', (e) => {
+        btn.releasePointerCapture(e.pointerId);
+        stopHold();
+      });
+      btn.addEventListener('pointercancel', stopHold);
+      btn.addEventListener('mouseleave', stopHold);
+    };
+
+    attachPointerEvents(btnM, false);
+    attachPointerEvents(btnP, true);
+
+    // Глобальний fallback
     addTrackedEventListener(window, 'mouseup', stopHold);
-    btnM.addEventListener('mouseleave', stopHold);
-    btnP.addEventListener('mouseleave', stopHold);
+    addTrackedEventListener(window, 'touchend', stopHold);
 
     // Введення через Prompt
     valEl.style.cursor = 'pointer';
