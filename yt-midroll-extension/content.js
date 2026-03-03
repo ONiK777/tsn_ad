@@ -708,8 +708,15 @@ async function analyzeWaveform() {
   })).sort((a, b) => {
     // Пріоритет на початок відео, якщо focusStart
     if (CONFIG.focusStart) {
-      const aBoost = 1 + (1 - a.seconds / duration);
-      const bBoost = 1 + (1 - b.seconds / duration);
+      // АГРЕСИВНИЙ буст для початку відео!
+      // Перші 20% відео отримують 5x буст, далі поступово спадає
+      const aPosition = a.seconds / duration; // 0 = початок, 1 = кінець
+      const bPosition = b.seconds / duration;
+
+      // Експоненційний буст: початок відео x5, середина x1.5, кінець x1
+      const aBoost = 1 + (4 * Math.pow(1 - aPosition, 2)); // 5x на початку -> 1x в кінці
+      const bBoost = 1 + (4 * Math.pow(1 - bPosition, 2));
+
       return (b.score * bBoost) - (a.score * aBoost);
     }
     return b.score - a.score;
@@ -1138,12 +1145,14 @@ function createPanel() {
 input:checked+.msl{background:#c91c1c}
 input:checked+.msl:before{transform:translateX(14px);background:#fff}
 .mtl{color:#bbb;font-size:11px}
-#mra-analyze,#mra-insert{width:100%;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:0.5px;transition:all .2s;margin-bottom:6px}
+#mra-analyze,#mra-insert,#mra-clear{width:100%;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:0.5px;transition:all .2s;margin-bottom:6px}
 #mra-analyze{background:#c91c1c;color:#ffffff}
 #mra-analyze:hover{background:#cc0000}
 #mra-insert{background:#222;color:#ffffff;border:1px solid #c91c1c}
 #mra-insert:hover:not(:disabled){background:#c91c1c}
 #mra-insert:disabled{opacity:.4;cursor:not-allowed;border-color:#444;color:#777}
+#mra-clear{background:#111;color:#bbb;border:1px solid #333;margin-bottom:8px}
+#mra-clear:hover{background:#333;color:#fff;border-color:#555}
 #mra-list{margin:6px 0;max-height:120px;overflow-y:auto}
 #mra-list::-webkit-scrollbar{width:4px}
 #mra-list::-webkit-scrollbar-track{background:#111}
@@ -1169,8 +1178,14 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   <div class="ms">
     <div class="mst">📊 Основне</div>
     <div style="color:#ffffff;font-size:11px;padding:4px 0;font-weight:600;opacity:0.9;text-align:center;">
-      ✨ Авто-режим
+      🫠 Авто-режим
       <div style="margin-top:4px;font-weight:400;opacity:0.8;">ставимо рекламу скільки можна через 1.5-2 хв</div>
+    </div>
+    <div style="margin-top:8px;">
+      <div class="mtw">
+        <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
+        <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 Більше реклами на початку (x5 буст)</span>
+      </div>
     </div>
   </div>
 
@@ -1185,10 +1200,6 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     <div class="mtw">
       <label class="mt"><input type="checkbox" id="mra-auto-gap" checked><span class="msl"></span></label>
       <span class="mtl">Авто-режим (за тривалістю відео)</span>
-    </div>
-    <div class="mtw">
-      <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
-      <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">Більше реклами на початку (утримання)</span>
     </div>
     <div id="mra-auto-sect">
       ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
@@ -1216,6 +1227,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   <div id="mra-list"></div>
   <hr id="mra-divider">
   <button id="mra-insert" disabled>⚡ Вставити маркери</button>
+  <button id="mra-clear">🗑️ Очистити всі мітки на відео</button>
   <div id="mra-progress-label"></div>
   <div id="mra-progress-wrap"><div id="mra-progress-bar"></div></div>
   <div id="mra-status">Готовий до роботи</div>
@@ -1326,6 +1338,36 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   // ── Вставити ──
   document.getElementById('mra-insert').addEventListener('click', insertTimecodes);
+
+  // ── Очистити всі мітки (з YouTube) ──
+  document.getElementById('mra-clear').addEventListener('click', async () => {
+    updateStatus('🗑️ Очищення міток...', 'info');
+
+    // Шукаємо всі кнопки видалення в редакторі
+    let deleteBtns = Array.from(document.querySelectorAll('ytve-ad-breaks-editor ytcp-icon-button, ytve-ad-breaks-editor button'))
+      .filter(btn => {
+        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const id = (btn.id || '').toLowerCase();
+        const classes = (btn.className || '').toLowerCase();
+        return label.includes('delete') || label.includes('видалити') || label.includes('удалить') ||
+          id.includes('delete') || classes.includes('delete');
+      })
+      .filter(b => b.offsetParent !== null); // тільки видимі елементи
+
+    if (deleteBtns.length === 0) {
+      log('Не знайдено міток для видалення', 'warn');
+      updateStatus('Не знайдено міток на відео', 'info');
+      return;
+    }
+
+    log(`Видаляємо ${deleteBtns.length} міток з відео...`, 'info');
+    for (const btn of deleteBtns) {
+      btn.click();
+      await sleep(150); // Невелика затримка для стабільності
+    }
+
+    updateStatus('✅ Всі мітки успішно видалено!', 'success');
+  });
 
   // ── Мінімізувати та Закрити ──
   document.getElementById('mra-minimize').addEventListener('click', () => {
