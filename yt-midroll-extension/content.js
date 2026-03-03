@@ -1168,8 +1168,8 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   <div class="ms">
     <div class="mst">📊 Основне</div>
-    <div style="color:#06d6a0;font-size:11px;padding:4px 0;">
-      ✨ Авто-режим: ставимо рекламу скільки можна через 1.5-2 хв
+    <div style="color:#ffffff;font-size:11px;padding:4px 0;font-weight:600;opacity:0.9;">
+      Авто-режим: ставимо рекламу скільки можна через 1.5-2 хв
     </div>
   </div>
 
@@ -1187,7 +1187,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     </div>
     <div class="mtw">
       <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
-      <span class="mtl" style="color:#06d6a0;">Більше реклами на початку (утримання)</span>
+      <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">Більше реклами на початку (утримання)</span>
     </div>
     <div id="mra-auto-sect">
       ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
