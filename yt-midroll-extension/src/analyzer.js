@@ -723,46 +723,47 @@ async function insertTimecodes() {
   // ─── 7. ФІНАЛЬНА ЗАЧИСТКА: Видаляємо всі "00:00:00" ───
   try {
     updateStatus(`🧹 Фінальна перевірка...`, 'info');
-    await sleep(400); // Даємо React час домалювати останні мітки
+    await sleep(500); // Даємо React час домалювати останні мітки
 
-    const allVisibleInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'))
-      .filter(inp => inp.offsetParent !== null && (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00')));
-    const visibleDeleteBtns = getAdBreakDeleteButtons();
-
+    // Отримуємо всі кнопки видалення
+    const trashBtns = getAdBreakDeleteButtons();
     let garbageFound = 0;
-    // Йдемо з кінця, щоб видалення елементів не збивало індекси
-    for (let i = allVisibleInputs.length - 1; i >= 0; i--) {
-      const val = allVisibleInputs[i].value || '';
-      const cleanVal = val.replace(/[^0-9]/g, '');
-      if (cleanVal === '000000' || cleanVal === '00000000' || val === '00:00:00') {
-        if (visibleDeleteBtns[i]) {
-          visibleDeleteBtns[i].click();
+
+    // Йдемо з кінця списку, щоб кліки не збивали індекси
+    for (let i = trashBtns.length - 1; i >= 0; i--) {
+      const btn = trashBtns[i];
+      let row = btn;
+      let inputElement = null;
+
+      // Ідемо вгору по дереву, щоб знайти контейнер-рядок цієї реклами
+      for (let level = 0; level < 8; level++) {
+        if (!row) break;
+        row = row.parentElement;
+        if (!row) continue;
+
+        const inputs = Array.from(row.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
+        const timeInput = inputs.find(inp => inp.offsetParent !== null && (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00')));
+
+        if (timeInput) {
+          inputElement = timeInput;
+          break;
+        }
+      }
+
+      if (inputElement) {
+        const val = inputElement.value || '';
+        const cleanVal = val.replace(/[^0-9]/g, '');
+        // Якщо значення нульове або порожнє (React лишає пусте поле для 00:00:00)
+        if (cleanVal === '000000' || cleanVal === '00000000' || val === '00:00:00' || val.trim() === '') {
+          btn.click();
           garbageFound++;
-          await sleep(300);
-        } else {
-          // Якщо індекси роз'їхались, шукаємо іконку корзини поруч із інпутом по DOM-дереву (близькі батьки)
-          let currentEl = allVisibleInputs[i];
-          for (let level = 0; level < 7; level++) {
-            if (!currentEl) break;
-            currentEl = currentEl.parentElement;
-            const trash = currentEl.querySelectorAll(`path[d="\${AD_BREAK_TRASH_PATH}"]`);
-            if (trash.length === 1) {
-              const btnEl = trash[0].closest('ytcp-icon-button') || trash[0].closest('button') || trash[0].closest('[role="button"]');
-              if (btnEl) {
-                const inner = btnEl.querySelector('button') || btnEl;
-                inner.click();
-                garbageFound++;
-                await sleep(300);
-                break;
-              }
-            }
-          }
+          await sleep(350);
         }
       }
     }
 
     if (garbageFound > 0) {
-      log(`🧹 Очищено \${garbageFound} порожніх міток (00:00:00) з YouTube!`, 'success');
+      log(`🧹 Очищено ${garbageFound} нульових міток з відео!`, 'success');
       await sleep(500);
     }
   } catch (e) { console.error('Помилка фінальної зачистки:', e); }
