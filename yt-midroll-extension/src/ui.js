@@ -439,7 +439,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       if (deleted > totalToDelete + 10) break; // запобігаємо нескінченному циклу
     }
 
-    updateStatus(`✅ Успішно видалено ${deleted} міток!`, 'success');
+    updateStatus('🗑️ Всі реклами успішно видалено!', 'success');
   });
 
   // ── Мінімізувати та Закрити ──
