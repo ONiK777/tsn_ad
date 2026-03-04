@@ -558,6 +558,15 @@ async function insertTimecodes() {
       const deleteBtnsBefore = getAdBreakDeleteButtons();
       const inputsBefore = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
 
+      // 0. Відмотуємо сам плеєр до потрібного часу ПЕРЕД тим як тиснути "+"
+      const videoEl = document.querySelector('video');
+      if (videoEl) {
+        videoEl.currentTime = s.seconds;
+        videoEl.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+        videoEl.dispatchEvent(new Event('seeked', { bubbles: true }));
+        await sleep(400); // Чекаємо щоб YouTube Studio оновив свій внутрішній стан повзунка
+      }
+
       // 1. Клікаємо "Insert ad break"
       const btn = findInsertAdBreakButton();
       if (!btn) throw new Error('Кнопка вставки не знайдена');
@@ -612,7 +621,7 @@ async function insertTimecodes() {
         input.select();
         await sleep(50);
 
-        // Імітація як людина тисне Backspace щоб стерти 00:00:00
+        // Імітація як людина тисне Backspace щоб стерти поточні цифри
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8, bubbles: true }));
         await sleep(50);
 
@@ -634,12 +643,12 @@ async function insertTimecodes() {
 
       await typeTimecode();
 
-      // Перевірка чи React збив таймкод назад на 00:00:00 після нашого вводу
-      let val = (input.value || '').replace(/[^0-9]/g, '');
-      const isZero = !val || val === '00000000' || val === '000000';
+      // Перевірка чи React збив таймкод назад на старе значення
+      let currentVal = (input.value || '').replace(/[^0-9]/g, '');
+      let expectedVal = s.timecode.replace(/[^0-9]/g, '');
 
-      if (isZero) {
-        log('⚠️ React заблокував ввід. Пробиваємо жорстким методом...', 'warn');
+      if (currentVal !== expectedVal) {
+        log(`⚠️ React заблокував ввід (залишилось ${input.value}). Пробиваємо жорстким методом...`, 'warn');
         input.blur();
         await sleep(200);
         await typeTimecode();
