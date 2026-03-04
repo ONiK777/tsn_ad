@@ -535,24 +535,28 @@ async function insertTimecodes() {
     return;
   }
 
-  const silences = state.selected;
-  if (!silences.length) return;
+  // Беремо тільки ті паузи, які ще НЕ були успішно вставлені
+  const pendingSilences = state.selected.filter(s => !s.inserted);
+  if (!pendingSilences.length) {
+    updateStatus('✅ Всі мітки вже вставлено!', 'success');
+    return;
+  }
 
   state.inserting = true;
   state.insertAbort = false;
-  updateStatus(`⏳ Вставляємо ${silences.length} таймкоди...`, 'info');
-  updateProgress(0, silences.length);
+  updateStatus(`⏳ Вставляємо ${pendingSilences.length} нових міток...`, 'info');
+  updateProgress(0, pendingSilences.length);
   showStopButton(true);
 
   let ok = 0, fail = 0;
 
-  for (let idx = 0; idx < silences.length; idx++) {
+  for (let idx = 0; idx < pendingSilences.length; idx++) {
     if (state.insertAbort) {
       log(`⛔ Вставку зупинено користувачем після ${ok} міток`, 'warn');
       break;
     }
-    const s = silences[idx];
-    log(`[${idx + 1}/${silences.length}] Вставка: ${s.timecode}`, 'info');
+    const s = pendingSilences[idx];
+    log(`[${idx + 1}/${pendingSilences.length}] Вставка: ${s.timecode}`, 'info');
 
     try {
       // Запам'ятовуємо кнопки видалення ДО вставки (для виявлення дублів)
@@ -702,8 +706,11 @@ async function insertTimecodes() {
         await sleep(300);
       }
 
+      s.inserted = true; // Позначаємо мітку як УСПІШНО вставлену
+      renderSelectedList(); // Оновлюємо список щоб одразу показати що мітка вставлена
+
       ok++;
-      updateProgress(ok, silences.length);
+      updateProgress(ok, pendingSilences.length);
       log(`✅ ${s.timecode} вставлено`, 'success');
       await sleep(800);
     } catch (e) {
@@ -721,12 +728,12 @@ async function insertTimecodes() {
   state.insertAbort = false;
 
   if (aborted) {
-    updateStatus(`⛔ Зупинено! Вставлено ${ok} з ${silences.length}`, 'warn');
+    updateStatus(`⛔ Зупинено! Вставлено ${ok} з ${pendingSilences.length}`, 'warn');
   } else {
     updateStatus(
-      fail === 0 ? `🏁 Готово! ${ok} маркери вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
+      fail === 0 ? `🏁 Готово! ${ok} нових міток вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
       fail === 0 ? 'success' : 'warn'
     );
   }
-  updateProgress(ok, silences.length);
+  updateProgress(ok, pendingSilences.length);
 }

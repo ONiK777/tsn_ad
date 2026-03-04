@@ -115,14 +115,21 @@ function renderSelectedList() {
 
     const numSpan = document.createElement('span');
     numSpan.style.cssText = 'color:#c91c1c;font-weight:bold;';
-    numSpan.textContent = `${i + 1}.`;
+
+    if (s.inserted) {
+      numSpan.textContent = '✅';
+      numSpan.style.color = '#06d6a0'; // зеленим
+    } else {
+      numSpan.textContent = `${i + 1}.`;
+    }
 
     const timeSpan = document.createElement('span');
-    timeSpan.style.color = '#e0e0e0';
+    timeSpan.style.color = s.inserted ? '#888' : '#e0e0e0';
+    timeSpan.style.textDecoration = s.inserted ? 'line-through' : 'none';
     timeSpan.textContent = s.timecode;
 
     const durSpan = document.createElement('span');
-    durSpan.style.cssText = 'color:#888;font-size:11px;';
+    durSpan.style.cssText = 'color:#666;font-size:11px;';
     durSpan.textContent = `(${s.duration_sec}с)`;
 
     item.appendChild(numSpan);
