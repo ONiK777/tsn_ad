@@ -307,9 +307,6 @@ async function _doAnalyze() {
 
   const maxAmp = arrayMax(smoothed);
 
-  const p10 = getPercentile(smoothed, 0.10);
-  const p50 = getPercentile(smoothed, 0.50);
-
   // Перцентиль для порогу тиші
   const percentileValue = Math.max(0.01, Math.min(0.99, CONFIG.silenceThresholdPct / 100));
   const GLOBAL_THRESHOLD = getPercentile(smoothed, percentileValue);
@@ -317,8 +314,6 @@ async function _doAnalyze() {
   console.group('%c🔍 АНАЛІЗ ПОРОГІВ (Перцентиль)', 'color:#ffd166;font-weight:bold');
   console.log(`  Max амплітуда:     ${maxAmp.toFixed(4)}`);
   console.log(`  Середня (avgAbs):  ${avgAbs.toFixed(4)}`);
-  console.log(`  10-й перцентиль:   ${p10.toFixed(4)}`);
-  console.log(`  Медіана (50%):     ${p50.toFixed(4)}`);
   console.log(`  Поріг тиші (${CONFIG.silenceThresholdPct} перцентиль): ${GLOBAL_THRESHOLD.toFixed(4)} амплітуди`);
   console.groupEnd();
 
@@ -627,52 +622,63 @@ async function insertTimecodes() {
       else await sleep(200);
 
       // 3. Агресивний ввід таймкоду (обхід React)
-      const typeTimecode = async () => {
-        // React часто вбиває та перемальовує DOM-вузол для першої реклами ("0" -> "1" list transition)
-        // Тому ми гарантовано шукаємо найсвіжіший інпут в DOM перед вводом
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      const expectedVal = s.timecode.replace(/[^0-9]/g, '');
+
+      const refreshInput = () => {
+        // React часто перемальовує DOM-вузол — шукаємо найсвіжіший інпут
         const allTimeInputs = document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]');
         if (allTimeInputs.length > 0) {
-          input = allTimeInputs[allTimeInputs.length - 1]; // Беремо найновіший (останній) інпут
+          input = allTimeInputs[allTimeInputs.length - 1];
         }
+        return input && document.body.contains(input);
+      };
 
-        if (!input || !document.body.contains(input)) return; // Якщо інпут зник, відміна
+      const checkValue = () => {
+        return (input.value || '').replace(/[^0-9]/g, '') === expectedVal;
+      };
+
+      const typeTimecode = async (method) => {
+        if (!refreshInput()) return false;
 
         input.focus();
         await sleep(100);
         input.select();
         await sleep(50);
 
-        // Імітація як людина тисне Backspace щоб стерти поточні цифри
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8, bubbles: true }));
-        await sleep(50);
-
-        try {
-          // Найкращий спосіб нативної вставки для React
-          document.execCommand('insertText', false, s.timecode);
-        } catch (err) { }
-
-        // Страхувальний Native Setter
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(input, s.timecode);
-
-        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: s.timecode }));
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        if (method === 'execCommand') {
+          // Спосіб 1: execCommand — найприродніший для React (імітує справжній набір тексту)
+          try {
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, s.timecode);
+          } catch (err) { return false; }
+        } else {
+          // Спосіб 2: Native Setter + ручні події — fallback
+          nativeSetter.call(input, s.timecode);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
 
         await sleep(300);
+        return checkValue();
       };
 
-      await typeTimecode();
+      // Пробуємо execCommand (найкращий для React)
+      let success = await typeTimecode('execCommand');
 
-      // Перевірка чи React збив таймкод назад на старе значення
-      let currentVal = (input.value || '').replace(/[^0-9]/g, '');
-      let expectedVal = s.timecode.replace(/[^0-9]/g, '');
+      // Fallback 1: Native Setter
+      if (!success) {
+        log('⚠️ execCommand не спрацював, fallback на nativeSetter...', 'warn');
+        success = await typeTimecode('nativeSetter');
+      }
 
-      if (currentVal !== expectedVal) {
-        log(`⚠️ React заблокував ввід (залишилось ${input.value}). Пробиваємо жорстким методом...`, 'warn');
+      // Fallback 2: blur + повторна спроба
+      if (!success) {
+        log('⚠️ React заблокував ввід, жорсткий retry...', 'warn');
         input.blur();
-        await sleep(200);
-        await typeTimecode();
+        await sleep(300);
+        success = await typeTimecode('execCommand');
+        if (!success) await typeTimecode('nativeSetter');
       }
 
       await sleep(200);
@@ -713,6 +719,53 @@ async function insertTimecodes() {
       if (closeBtn) { closeBtn.click(); await sleep(500); }
     }
   }
+
+  // ─── 7. ФІНАЛЬНА ЗАЧИСТКА: Видаляємо всі "00:00:00" ───
+  try {
+    updateStatus(`🧹 Фінальна перевірка...`, 'info');
+    await sleep(400); // Даємо React час домалювати останні мітки
+
+    const allVisibleInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'))
+      .filter(inp => inp.offsetParent !== null && (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00')));
+    const visibleDeleteBtns = getAdBreakDeleteButtons();
+
+    let garbageFound = 0;
+    // Йдемо з кінця, щоб видалення елементів не збивало індекси
+    for (let i = allVisibleInputs.length - 1; i >= 0; i--) {
+      const val = allVisibleInputs[i].value || '';
+      const cleanVal = val.replace(/[^0-9]/g, '');
+      if (cleanVal === '000000' || cleanVal === '00000000' || val === '00:00:00') {
+        if (visibleDeleteBtns[i]) {
+          visibleDeleteBtns[i].click();
+          garbageFound++;
+          await sleep(300);
+        } else {
+          // Якщо індекси роз'їхались, шукаємо іконку корзини поруч із інпутом по DOM-дереву (близькі батьки)
+          let currentEl = allVisibleInputs[i];
+          for (let level = 0; level < 7; level++) {
+            if (!currentEl) break;
+            currentEl = currentEl.parentElement;
+            const trash = currentEl.querySelectorAll(`path[d="\${AD_BREAK_TRASH_PATH}"]`);
+            if (trash.length === 1) {
+              const btnEl = trash[0].closest('ytcp-icon-button') || trash[0].closest('button') || trash[0].closest('[role="button"]');
+              if (btnEl) {
+                const inner = btnEl.querySelector('button') || btnEl;
+                inner.click();
+                garbageFound++;
+                await sleep(300);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (garbageFound > 0) {
+      log(`🧹 Очищено \${garbageFound} порожніх міток (00:00:00) з YouTube!`, 'success');
+      await sleep(500);
+    }
+  } catch (e) { console.error('Помилка фінальної зачистки:', e); }
 
   showStopButton(false);
   state.inserting = false;

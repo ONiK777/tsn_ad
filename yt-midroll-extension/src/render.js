@@ -74,19 +74,22 @@ function renderSelectedList() {
       <span style="color:${ratioColor};" title="Статус щільності реклами">${ratioEmoji}</span>
     `;
 
-    // Анімація: блимає 2 рази (підсвітка межі та тіні) щоб звернути увагу
-    try {
-      stats.animate([
-        { boxShadow: '0 0 0px transparent', borderColor: '#333' },
-        { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
-        { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
-        { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
-        { boxShadow: '0 0 0px transparent', borderColor: '#333' }
-      ], {
-        duration: 1200,
-        easing: 'ease-in-out'
-      });
-    } catch (e) { }
+    // Анімація: блимає 2 рази — тільки коли кількість міток змінилась
+    if (lastStatsAdCount !== actualAds) {
+      lastStatsAdCount = actualAds;
+      try {
+        stats.animate([
+          { boxShadow: '0 0 0px transparent', borderColor: '#333' },
+          { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
+          { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
+          { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
+          { boxShadow: '0 0 0px transparent', borderColor: '#333' }
+        ], {
+          duration: 1200,
+          easing: 'ease-in-out'
+        });
+      } catch (e) { }
+    }
   } else if (stats) {
     stats.style.display = 'none';
   }
@@ -139,6 +142,7 @@ function renderSelectedList() {
 // ─── ВІЗУАЛІЗАЦІЯ ВЕЙВФОРМИ ───────────────────────────────────────────────────
 var offscreenCanvas = null;
 var lastRenderSignature = null;
+var lastStatsAdCount = null;
 
 function renderWaveform() {
   const canvas = document.getElementById('mra-waveform');
@@ -171,7 +175,7 @@ function renderWaveform() {
 
   // Сигнатура лише для статичного фону (вейвформа + поріг + паузи)
   // Маркери малюються поверх offscreen — їх зміна НЕ потребує перемальовування фону
-  const signature = `${totalBlocks}_${threshold}_${state.silences.length} `;
+  const signature = `${totalBlocks}_${threshold}_${state.silences.length}`;
 
   const needsRedraw = lastRenderSignature !== signature;
 
