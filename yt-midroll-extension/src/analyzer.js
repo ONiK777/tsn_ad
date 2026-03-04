@@ -720,20 +720,6 @@ async function insertTimecodes() {
     }
   }
 
-  // ─── 7. Перевірка: чи є мітка 00:00:00? ───
-  try {
-    await sleep(500);
-    const allInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]'))
-      .filter(inp => inp.offsetParent !== null);
-    const hasZeroMark = allInputs.some(inp => {
-      const clean = (inp.value || '').replace(/[^0-9]/g, '');
-      return clean === '' || /^0+$/.test(clean);
-    });
-    if (hasZeroMark) {
-      log('⚠️ Знайдена мітка на 00:00:00 — видаліть її вручну!', 'warn');
-    }
-  } catch (e) { /* ignore */ }
-
   showStopButton(false);
   state.inserting = false;
 
@@ -747,22 +733,6 @@ async function insertTimecodes() {
       fail === 0 ? `🏁 Готово! ${ok} маркери вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
       fail === 0 ? 'success' : 'warn'
     );
-    // Якщо знайдено нульову мітку — повідомляємо окремо поверх
-    if (!aborted) {
-      try {
-        await sleep(600);
-        const allInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]'))
-          .filter(inp => inp.offsetParent !== null);
-        const hasZeroMark = allInputs.some(inp => {
-          const clean = (inp.value || '').replace(/[^0-9]/g, '');
-          return clean === '' || /^0+$/.test(clean);
-        });
-        if (hasZeroMark) {
-          updateStatus('⛔ Увага! Є мітка на 00:00:00 — видаліть її вручну!', 'error');
-          log('⚠️ Знайдена мітка на 00:00:00 — натисніть 🗑️ поруч з нею та видаліть!', 'warn');
-        }
-      } catch (e) { /* ignore */ }
-    }
   }
   updateProgress(ok, silences.length);
 }
