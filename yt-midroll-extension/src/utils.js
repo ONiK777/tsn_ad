@@ -11,7 +11,10 @@ function isValidUrl(url) {
   if (!url || typeof url !== 'string') return false;
   try {
     const parsedUrl = new URL(url);
-    return parsedUrl.protocol === 'https:' && parsedUrl.hostname.includes('youtube.com');
+    if (parsedUrl.protocol !== 'https:') return false;
+    const host = parsedUrl.hostname;
+    return host.includes('youtube.com') || host.includes('googlevideo.com') ||
+           host.includes('ytimg.com') || host.includes('ggpht.com') || host.includes('googleusercontent.com');
   } catch {
     return false;
   }
@@ -168,17 +171,17 @@ var _clamp = (val, min, max, defaultVal) => {
 
 function readSettings() {
   try {
-    CONFIG.minSilenceSec = _clamp(getVal('mra-min-silence'), 0.5, 30, 1.5);
+    CONFIG.minSilenceSec = _clamp(getVal('mra-min-silence'), 0.1, 30, 1.5);
     CONFIG.silenceThresholdPct = _clamp(getVal('mra-threshold'), 1, 50, 15);
 
     CONFIG.focusStart = document.getElementById('mra-focus-start')?.checked ?? true;
     CONFIG.autoOpenPanel = document.getElementById('mra-auto-open')?.checked ?? true;
     CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
 
-    CONFIG.minGapSec = _clamp(getVal('mra-min-gap'), 10, 7200, 180);
+    CONFIG.minGapSec = _clamp(getVal('mra-min-gap'), 1, 7200, 120);
     CONFIG.shortVideoCutoff = _clamp(getVal('mra-cutoff'), 1, 120, 10) * 60;
-    CONFIG.longVideoGapSec = _clamp(getVal('mra-long-gap'), 10, 3600, 180);
-    CONFIG.shortVideoGapSec = _clamp(getVal('mra-short-gap'), 10, 600, 60);
+    CONFIG.longVideoGapSec = _clamp(getVal('mra-long-gap'), 1, 3600, 120);
+    CONFIG.shortVideoGapSec = _clamp(getVal('mra-short-gap'), 1, 600, 60);
 
     // Зберігаємо налаштування для наступної сесії
     saveSettings();

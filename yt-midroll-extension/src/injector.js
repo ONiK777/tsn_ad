@@ -33,6 +33,7 @@ window.addEventListener('message', function (event) {
       state.waveformData = null;
       state.silences = [];
       state.selected = [];
+      lastStatsAdCount = null;
       log('🔄 Нове відео виявлено — кеш скинуто', 'info');
       renderSelectedList();
       renderWaveform();

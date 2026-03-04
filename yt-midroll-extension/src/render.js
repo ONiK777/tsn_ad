@@ -212,8 +212,10 @@ function renderWaveform() {
       offCtx.fillRect(x, barY, 1, barHeight);
     }
 
-    // Лінія порогу тиші
-    const thresholdY = h - (threshold / maxAmp * h * 0.8);
+    // Лінія порогу тиші (відповідає центрованим барам вейвформи)
+    const normalizedThreshold = threshold / maxAmp;
+    const thresholdBarH = normalizedThreshold * h * 0.8;
+    const thresholdY = (h - thresholdBarH) / 2;
     offCtx.strokeStyle = '#555555';
     offCtx.setLineDash([2, 5]);
     offCtx.beginPath();
@@ -232,12 +234,34 @@ function renderWaveform() {
     lastRenderSignature = signature;
   }
 
-  // Копіюємо офскрін на видимий canvas
+  // Копіюємо офскрін на видимий canvas (вказуємо логічний розмір, щоб HiDPI не масштабував двічі)
   if (offscreenCanvas) {
-    ctx.drawImage(offscreenCanvas, 0, 0);
+    ctx.drawImage(offscreenCanvas, 0, 0, w, h);
   } else {
     ctx.fillStyle = '#111111';
     ctx.fillRect(0, 0, w, h);
+  }
+
+  // ── Кольорові зони між маркерами ──
+  if (state.selected.length > 0) {
+    const zoneColors = [
+      'rgba(255, 100, 100, 0.10)',  // червонуватий
+      'rgba(255, 200,  60, 0.10)',  // жовтуватий
+      'rgba(100, 220, 130, 0.10)',  // зеленуватий
+      'rgba( 80, 180, 255, 0.10)',  // блакитний
+      'rgba(200, 110, 255, 0.10)',  // фіолетовий
+      'rgba(255, 150,  50, 0.10)',  // помаранчевий
+    ];
+
+    // Точки зон: початок відео → кожен маркер → кінець відео
+    const zoneBoundaries = [0, ...state.selected.map(s => s.seconds), duration];
+
+    for (let z = 0; z < zoneBoundaries.length - 1; z++) {
+      const x1 = (zoneBoundaries[z] / duration) * w;
+      const x2 = (zoneBoundaries[z + 1] / duration) * w;
+      ctx.fillStyle = zoneColors[z % zoneColors.length];
+      ctx.fillRect(x1, 0, x2 - x1, h);
+    }
   }
 
   // Відібрані паузи (яскраві маркери) — завжди поверх

@@ -411,7 +411,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       await sleep(400); // Даємо час React застосувати зміни
     }
 
-    const deleteBtns = getAdBreakDeleteButtons();
+    let deleteBtns = getAdBreakDeleteButtons();
 
     if (deleteBtns.length === 0) {
       log('Не знайдено міток для видалення', 'warn');
@@ -419,13 +419,19 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       return;
     }
 
-    log(`Видаляємо ${deleteBtns.length} міток з відео...`, 'info');
-    for (let i = deleteBtns.length - 1; i >= 0; i--) {
-      deleteBtns[i].click();
+    const totalToDelete = deleteBtns.length;
+    log(`Видаляємо ${totalToDelete} міток з відео...`, 'info');
+    let deleted = 0;
+    while (true) {
+      deleteBtns = getAdBreakDeleteButtons();
+      if (deleteBtns.length === 0) break;
+      deleteBtns[deleteBtns.length - 1].click();
+      deleted++;
       await sleep(150);
+      if (deleted > totalToDelete + 10) break; // запобігаємо нескінченному циклу
     }
 
-    updateStatus(`✅ Успішно видалено ${deleteBtns.length} міток!`, 'success');
+    updateStatus(`✅ Успішно видалено ${deleted} міток!`, 'success');
   });
 
   // ── Мінімізувати та Закрити ──

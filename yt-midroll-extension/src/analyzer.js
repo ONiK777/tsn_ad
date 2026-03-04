@@ -254,7 +254,15 @@ async function _doAnalyze() {
     return false;
   }
 
-  const { samples, fmt, secPerSample, equivalentSampleRate, avgAbs } = detectAndParseSamples(buffer, duration);
+  let parseResult;
+  try {
+    parseResult = detectAndParseSamples(buffer, duration);
+  } catch (e) {
+    updateStatus(`❌ Помилка формату аудіо: ${e.message}`, 'error');
+    log('Деталі: ' + e.stack, 'error');
+    return false;
+  }
+  const { samples, fmt, secPerSample, equivalentSampleRate, avgAbs } = parseResult;
 
   updateStatus(`⚙️ ${fmt}, ~${equivalentSampleRate} sps. Будуємо огинаючу...`, 'info');
 
