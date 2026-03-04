@@ -1,7 +1,11 @@
 // ─── ШАБЛОНИ UI ──────────────────────────────────────────────────────────────
 function row(label, ctrl, hint = '') {
-  return `<div class="mr"><span class="ml">${label}</span><span class="mc">${ctrl}</span>${hint ? `<span class="mh">${hint}</span>` : ''}</div>`;
+  const tipHtml = hint
+    ? `<span style="cursor:help;margin-left:3px;opacity:0.5;font-size:10px;flex-shrink:0;" title="${hint.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}">ℹ️</span>`
+    : '';
+  return `<div class="mr"><span class="ml">${label}${tipHtml}</span><span class="mc">${ctrl}</span></div>`;
 }
+
 
 function stepper(id, val, min, max, step) {
   return `<div class="stp" data-id="${id}" data-val="${val}" data-min="${min}" data-max="${max}" data-step="${step}">
@@ -129,23 +133,23 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
   <div class="ms">
     <div class="mst">🔇 Де ставити рекламу</div>
-    ${row('Мін. тривалість паузи (с):', stepper('mra-min-silence', 1.5, 0.1, 30, 0.1))}
-    ${row('Поріг тиші (%):', stepper('mra-threshold', 15, 1, 50, 1), '% від максимуму (↓ = більше пауз)')}
+    ${row('Мін. тиша для паузи (с):', stepper('mra-min-silence', 1.5, 0.1, 30, 0.1), 'Скільки секунд має бути тихо, щоб бот вважав це "паузою" і поставив там рекламу')}
+    ${row('Чутливість до тиші (%):', stepper('mra-threshold', 15, 1, 50, 1), '↑ більше % = бот бачить менше пауз (тільки дуже тихі місця)\n↓ менше % = бот бачить більше пауз (навіть напівтиші)')}
   </div>
 
   <div class="ms">
     <div class="mst">↔️ Відстань між рекламами</div>
     <div class="mtw">
       <label class="mt"><input type="checkbox" id="mra-auto-gap" checked><span class="msl"></span></label>
-      <span class="mtl">Авто-режим (за тривалістю відео)</span>
+      <span class="mtl" title="Бот сам підбирає частоту реклами залежно від довжини відео">🤖 Авто (бот вирішує сам)</span>
     </div>
     <div id="mra-auto-sect">
-      ${row('Поріг "коротке" відео (хв):', stepper('mra-cutoff', 10, 1, 120, 1))}
-      ${row('Gap короткого відео (с):', stepper('mra-short-gap', 60, 1, 600, 1))}
-      ${row('Gap довгого відео (с):', stepper('mra-long-gap', 120, 1, 3600, 1))}
+      ${row('Короткі відео — до (хв):', stepper('mra-cutoff', 10, 1, 120, 1), 'Відео коротше цього = "коротке". Наприклад: 10 хв → відео до 10 хв вважаються короткими')}
+      ${row('Реклама кожні (с) — короткі:', stepper('mra-short-gap', 60, 1, 600, 1), 'Для коротких відео: ставити рекламу кожні N секунд')}
+      ${row('Реклама кожні (с) — довгі:', stepper('mra-long-gap', 120, 1, 3600, 1), 'Для довгих відео: ставити рекламу кожні N секунд')}
     </div>
     <div id="mra-manual-sect" style="display:none">
-      ${row('Мін. відстань між рекламами (с):', stepper('mra-min-gap', 120, 1, 7200, 1))}
+      ${row('Мінімум між рекламами (с):', stepper('mra-min-gap', 120, 1, 7200, 1), 'Ручний режим: не ставити дві реклами ближче, ніж вказана кількість секунд')}
     </div>
   </div>
 
