@@ -450,37 +450,21 @@ async function _doAnalyze() {
       }
     }
 
-    // Fallback 2: Жорсткий. Якщо блогер говорить безперервно і пауз немає взагалі,
-    // ми ПРИМУСОВО знаходимо найквітіший момент (вдих/міжслів'я) у нашому ідеальному вікні.
+    // Якщо у вікні НІЧОГО немає — пропускаємо цей слот, рухаємо playhead вперед
+    // (НЕ ставимо "синтетичні" мітки без реальної паузи)
     if (!bestPause) {
-      let localMinAmp = Infinity;
-      let localMinSec = target;
-
-      const startBlock = Math.max(0, Math.floor(windowStart / secPerBlock));
-      const endBlock = Math.min(totalBlocks - 1, Math.floor(windowEnd / secPerBlock));
-
-      for (let b = startBlock; b <= endBlock; b++) {
-        if (smoothed[b] < localMinAmp) {
-          localMinAmp = smoothed[b];
-          localMinSec = b * secPerBlock;
-        }
-      }
-
-      bestPause = {
-        timecode: toTimecode(localMinSec),
-        seconds: +(localMinSec).toFixed(2),
-        duration_sec: 0.1, // Це штучна мітка
-        amplitude: +(localMinAmp).toFixed(4),
-        is_forced: true
-      };
-      log(`Немає тиші! Згенеровано примусову мітку на ${bestPause.timecode}`, 'warn');
+      // Рухаємо playhead на наступний таргет щоб уникнути нескінченного циклу
+      playhead = target + currentGap * 0.5;
+      if (playhead > duration - 15) break;
+      log(`⚠️ Не знайдено паузи ≥${CONFIG.minSilenceSec}с у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)}, слот пропущено`, 'warn');
+      continue;
     }
 
-    // Додаємо відібрану або згенеровану паузу
-    if (bestPause && bestPause.seconds < duration - 15) {
+    // Додаємо відібрану паузу (тільки реальна тиша)
+    if (bestPause.seconds < duration - 15) {
       selectedCands.push(bestPause);
-      if (!bestPause.is_forced) usedPauses.add(bestPause);
-      playhead = bestPause.seconds; // "Пересуваємо" лінійку до цієї знайденої паузи!
+      usedPauses.add(bestPause);
+      playhead = bestPause.seconds;
     } else {
       break;
     }
