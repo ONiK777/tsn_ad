@@ -1,9 +1,9 @@
 // ─── ІНІЦІАЛІЗАЦІЯ ────────────────────────────────────────────────────────────
-async function init() {
+function init() {
   cleanup();
 
   // Завантажуємо збережені налаштування
-  await loadSettings();
+  loadSettings();
 
   if (CONFIG.autoOpenPanel === false) {
     isPanelClosedByUser = true;

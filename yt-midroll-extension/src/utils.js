@@ -113,6 +113,36 @@ function toTimecode(seconds) {
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
 }
 
+// Парсинг таймкоду з рядка у секунди
+// Підтримує формати: MM:SS:FF, MM:SS, HH:MM:SS:FF, HH:MM:SS, SS
+function parseTimecodeInput(input) {
+  if (!input || typeof input !== 'string') return null;
+
+  const parts = input.split(':').map(p => parseFloat(p.trim()));
+  if (parts.some(p => isNaN(p) || p < 0)) return null;
+
+  let seconds = 0;
+
+  if (parts.length === 1) {
+    // SS
+    seconds = parts[0];
+  } else if (parts.length === 2) {
+    // MM:SS
+    seconds = parts[0] * 60 + parts[1];
+  } else if (parts.length === 3) {
+    // MM:SS:FF (кадри 25fps)
+    seconds = parts[0] * 60 + parts[1] + parts[2] / 25;
+  } else if (parts.length === 4) {
+    // HH:MM:SS:FF
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2] + parts[3] / 25;
+  } else {
+    return null;
+  }
+
+  if (!isFinite(seconds) || seconds < 0) return null;
+  return seconds;
+}
+
 function updateStatus(msg, type = 'info') {
   const el = document.getElementById('mra-status');
   if (!el) return;
@@ -172,21 +202,16 @@ function saveSettings() {
 }
 
 function loadSettings() {
-  return new Promise(resolve => {
-    try {
-      const raw = localStorage.getItem('mraSettings');
-      if (raw) {
-        const s = JSON.parse(raw);
-        SETTINGS_KEYS.forEach(k => {
-          if (s[k] !== undefined) CONFIG[k] = s[k];
-        });
-        log('Налаштування завантажено з попередньої сесії', 'info');
-      }
-      resolve();
-    } catch (e) {
-      resolve();
+  try {
+    const raw = localStorage.getItem('mraSettings');
+    if (raw) {
+      const s = JSON.parse(raw);
+      SETTINGS_KEYS.forEach(k => {
+        if (s[k] !== undefined) CONFIG[k] = s[k];
+      });
+      log('Налаштування завантажено з попередньої сесії', 'info');
     }
-  });
+  } catch (e) { /* ignore */ }
 }
 
 function resetSettings() {
@@ -203,7 +228,7 @@ function resetSettings() {
   };
   Object.assign(CONFIG, defaults);
   try {
-    chrome.storage.local.remove('mraSettings');
+    localStorage.removeItem('mraSettings');
   } catch (e) { /* ignore */ }
   log('Налаштування скинуто до заводських', 'info');
 }

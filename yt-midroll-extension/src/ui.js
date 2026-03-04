@@ -245,18 +245,26 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     const btnP = stp.querySelector('.stp-p');
 
     const attachPointerEvents = (btn, isPlus) => {
-      btn.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return; // Тільки лівий клік
+      const onDown = (e) => {
+        if (e.button !== 0) return;
         e.preventDefault();
         btn.setPointerCapture(e.pointerId);
         startHold(isPlus);
-      });
-      btn.addEventListener('pointerup', (e) => {
+      };
+      const onUp = (e) => {
         btn.releasePointerCapture(e.pointerId);
         stopHold();
-      });
+      };
+      btn.addEventListener('pointerdown', onDown);
+      btn.addEventListener('pointerup', onUp);
       btn.addEventListener('pointercancel', stopHold);
       btn.addEventListener('mouseleave', stopHold);
+      activeEventListeners.push(
+        { element: btn, event: 'pointerdown', handler: onDown, options: false },
+        { element: btn, event: 'pointerup', handler: onUp, options: false },
+        { element: btn, event: 'pointercancel', handler: stopHold, options: false },
+        { element: btn, event: 'mouseleave', handler: stopHold, options: false }
+      );
     };
 
     attachPointerEvents(btnM, false);
@@ -323,35 +331,64 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       const clickPercent = x / rect.width;
       const clickSec = clickPercent * state.waveformData.duration;
 
+      // Перевірити, чи клік близько до існуючої мітки (для видалення)
       const existingIdx = state.selected.findIndex(s => Math.abs(s.seconds - clickSec) < 5);
 
       if (existingIdx !== -1) {
         state.selected.splice(existingIdx, 1);
         log(`Видалено мітку на ${toTimecode(clickSec)}`, 'warn');
-      } else {
-        let finalSec = clickSec;
-        let closestRaw = null;
-        let minDist = 2.5;
-        state.silences.forEach(s => {
-          const dist = Math.abs(s.seconds - clickSec);
-          if (dist < minDist) { minDist = dist; closestRaw = s; }
-        });
-
-        if (closestRaw) {
-          finalSec = closestRaw.seconds;
-          log('🧲 Клік примагнітився до реальної паузи!', 'info');
-        }
-
-        state.selected.push({
-          timecode: toTimecode(finalSec),
-          seconds: +finalSec.toFixed(2),
-          duration_sec: closestRaw ? closestRaw.duration_sec : 0,
-          amplitude: closestRaw ? closestRaw.amplitude : 0,
-          manual: true
-        });
-        state.selected.sort((a, b) => a.seconds - b.seconds);
-        log(`Додано вручну мітку на ${toTimecode(finalSec)}`, 'success');
+        renderSelectedList();
+        renderWaveform();
+        return;
       }
+
+      // Магніт: примагнітити до найближчої паузи (якщо ближче 2.5с)
+      let finalSec = clickSec;
+      let closestRaw = null;
+      let minDist = 2.5;
+      state.silences.forEach(s => {
+        const dist = Math.abs(s.seconds - clickSec);
+        if (dist < minDist) { minDist = dist; closestRaw = s; }
+      });
+
+      if (closestRaw) {
+        finalSec = closestRaw.seconds;
+      }
+
+      // Показуємо prompt з попередньо заповненим таймкодом
+      const defaultTimecode = toTimecode(finalSec);
+      const userInput = prompt('Введіть таймкод для мітки (ММ:СС:КК або ММ:СС):', defaultTimecode);
+
+      if (userInput === null || userInput.trim() === '') return; // Скасовано
+
+      // Парсимо введений таймкод
+      const parsed = parseTimecodeInput(userInput.trim());
+      if (parsed === null) {
+        log(`Некоректний таймкод: "${userInput}"`, 'error');
+        updateStatus('❌ Некоректний формат таймкоду', 'error');
+        return;
+      }
+
+      // Перевіряємо чи мітка в межах відео
+      if (parsed < 0 || parsed >= state.waveformData.duration) {
+        log(`Таймкод за межами відео: ${userInput}`, 'error');
+        updateStatus('❌ Таймкод за межами відео', 'error');
+        return;
+      }
+
+      if (closestRaw && Math.abs(parsed - finalSec) < 0.1) {
+        log('🧲 Примагнітився до реальної паузи!', 'info');
+      }
+
+      state.selected.push({
+        timecode: toTimecode(parsed),
+        seconds: +parsed.toFixed(2),
+        duration_sec: closestRaw && Math.abs(parsed - closestRaw.seconds) < 3 ? closestRaw.duration_sec : 0,
+        amplitude: closestRaw && Math.abs(parsed - closestRaw.seconds) < 3 ? closestRaw.amplitude : 0,
+        manual: true
+      });
+      state.selected.sort((a, b) => a.seconds - b.seconds);
+      log(`Додано вручну мітку на ${toTimecode(parsed)}`, 'success');
 
       renderSelectedList();
       renderWaveform();

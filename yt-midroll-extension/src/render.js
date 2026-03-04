@@ -102,9 +102,9 @@ function renderWaveform() {
   const w = displayW;
   const h = displayH;
 
-  // Повна сигнатура: включає позиції міток для коректної інвалідації
-  const selectedKey = state.selected.map(s => s.seconds).join(',');
-  const signature = `${totalBlocks}_${threshold}_${state.silences.length}_${selectedKey}`;
+  // Сигнатура лише для статичного фону (вейвформа + поріг + паузи)
+  // Маркери малюються поверх offscreen — їх зміна НЕ потребує перемальовування фону
+  const signature = `${totalBlocks}_${threshold}_${state.silences.length}`;
 
   const needsRedraw = lastRenderSignature !== signature;
 
@@ -198,5 +198,5 @@ function renderWaveform() {
     ctx.fillText(timeStr, x, h - 2);
   }
 
-  log('Вейвформа оновлена' + (needsRedraw ? ' (повний рендер)' : ' (швидкий)'), 'info');
+  if (needsRedraw) log('Вейвформа: повний рендер', 'info');
 }

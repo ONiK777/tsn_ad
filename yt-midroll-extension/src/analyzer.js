@@ -516,9 +516,6 @@ async function _doAnalyze() {
 // ─── АВТОВСТАВКА ─────────────────────────────────────────────────────────────
 // СТРАТЕГІЯ: Вставляємо мітку → вводимо таймкод → видаляємо дублікат якщо YouTube створив зайвий
 
-// Знаходимо всі кнопки видалення (trash) в YouTube Studio ad breaks editor
-var AD_BREAK_TRASH_PATH = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
-
 function getAdBreakDeleteButtons() {
   const btns = [];
   document.querySelectorAll(`path[d="${AD_BREAK_TRASH_PATH}"]`).forEach(path => {
@@ -608,25 +605,51 @@ async function insertTimecodes() {
       if (idx === 0) await sleep(1200);
       else await sleep(200);
 
-      // 3. Вводимо таймкод (оригінальний метод який працює для значень)
-      input.focus();
-      await sleep(100);
-      input.select();
-      await sleep(50);
+      // 3. Агресивний ввід таймкоду (обхід React)
+      const typeTimecode = async () => {
+        input.focus();
+        await sleep(100);
+        input.select();
+        await sleep(50);
 
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      nativeSetter.call(input, s.timecode);
+        // Імітація як людина тисне Backspace щоб стерти 00:00:00
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8, bubbles: true }));
+        await sleep(50);
 
-      input.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true, cancelable: true, inputType: 'insertText', data: s.timecode
-      }));
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      await sleep(500);
+        try {
+          // Найкращий спосіб нативної вставки для React
+          document.execCommand('insertText', false, s.timecode);
+        } catch (err) { }
+
+        // Страхувальний Native Setter
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(input, s.timecode);
+
+        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: s.timecode }));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+
+        await sleep(300);
+      };
+
+      await typeTimecode();
+
+      // Перевірка чи React збив таймкод назад на 00:00:00 після нашого вводу
+      let val = (input.value || '').replace(/[^0-9]/g, '');
+      const isZero = !val || val === '00000000' || val === '000000';
+
+      if (isZero) {
+        log('⚠️ React заблокував ввід. Пробиваємо жорстким методом...', 'warn');
+        input.blur();
+        await sleep(200);
+        await typeTimecode();
+      }
+
+      await sleep(200);
 
       // 4. Enter для підтвердження
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-      await sleep(500);
+      await sleep(300);
 
       // 5. Підтвердження діалогу (якщо є)
       const confirmBtn = findConfirmButton();
