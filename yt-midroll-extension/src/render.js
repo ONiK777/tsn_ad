@@ -242,25 +242,45 @@ function renderWaveform() {
     ctx.fillRect(0, 0, w, h);
   }
 
-  // ── Кольорові зони між маркерами ──
+  // ── Смислові зони між маркерами (колір = якість відстані) ──
   if (state.selected.length > 0) {
-    const zoneColors = [
-      'rgba(255, 100, 100, 0.10)',  // червонуватий
-      'rgba(255, 200,  60, 0.10)',  // жовтуватий
-      'rgba(100, 220, 130, 0.10)',  // зеленуватий
-      'rgba( 80, 180, 255, 0.10)',  // блакитний
-      'rgba(200, 110, 255, 0.10)',  // фіолетовий
-      'rgba(255, 150,  50, 0.10)',  // помаранчевий
-    ];
-
-    // Точки зон: початок відео → кожен маркер → кінець відео
+    // Межі зон: 0 → мітка1 → мітка2 → ... → кінець відео
     const zoneBoundaries = [0, ...state.selected.map(s => s.seconds), duration];
 
     for (let z = 0; z < zoneBoundaries.length - 1; z++) {
+      const gapSec = zoneBoundaries[z + 1] - zoneBoundaries[z];
       const x1 = (zoneBoundaries[z] / duration) * w;
       const x2 = (zoneBoundaries[z + 1] / duration) * w;
-      ctx.fillStyle = zoneColors[z % zoneColors.length];
-      ctx.fillRect(x1, 0, x2 - x1, h);
+      const zoneW = x2 - x1;
+
+      // Колір зони залежить від тривалості відрізку
+      // Ідеал: ~120 сек (2 хв). < 60 сек = густо (червоний), 60-100 = жовтий, > 180 = блідо-жовтий
+      let bgColor;
+      if (gapSec < 60) {
+        bgColor = 'rgba(255, 60, 60, 0.18)';   // червоний — дуже густо
+      } else if (gapSec < 100) {
+        bgColor = 'rgba(255, 200, 40, 0.14)';  // жовтий — trохи густо
+      } else if (gapSec <= 160) {
+        bgColor = 'rgba(60, 200, 100, 0.12)';  // зелений — ок (2 хв ±30с)
+      } else {
+        bgColor = 'rgba(100, 160, 255, 0.10)'; // блакитний — великий відрізок
+      }
+
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(x1, 0, zoneW, h);
+
+      // Текст з тривалістю відрізку по центру зони (тільки якщо є місце)
+      if (zoneW > 22) {
+        const gapMin = Math.floor(gapSec / 60);
+        const gapRemSec = Math.floor(gapSec % 60);
+        const gapLabel = gapMin > 0
+          ? `${gapMin}:${String(gapRemSec).padStart(2, '0')}`
+          : `${Math.floor(gapSec)}с`;
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.font = 'bold 9px Arial';
+        const textX = x1 + zoneW / 2 - ctx.measureText(gapLabel).width / 2;
+        ctx.fillText(gapLabel, textX, h / 2 + 4);
+      }
     }
   }
 
