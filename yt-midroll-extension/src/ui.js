@@ -100,6 +100,10 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 #mra-progress-bar{height:100%;background:#c91c1c;width:0%;transition:width .3s;border-radius:2px}
 #mra-progress-label{color:#888;font-size:10px;text-align:right;margin-bottom:3px}
 #mra-status{font-size:11px;color:#ccc;min-height:16px;word-break:break-word;line-height:1.4}
+@keyframes mra-pulse-red{0%,100%{box-shadow:0 0 0px transparent;border-color:#333}50%{box-shadow:0 0 10px rgba(255,80,80,0.6);border-color:rgba(255,80,80,0.7)}}
+@keyframes mra-pulse-yellow{0%,100%{box-shadow:0 0 0px transparent;border-color:#333}50%{box-shadow:0 0 8px rgba(255,209,60,0.5);border-color:rgba(255,209,60,0.6)}}
+.mra-pulse-red{animation:mra-pulse-red 2s ease-in-out infinite}
+.mra-pulse-yellow{animation:mra-pulse-yellow 2.5s ease-in-out infinite}
 </style>
 
 <div id="mra-header">

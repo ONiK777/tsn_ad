@@ -74,29 +74,37 @@ function renderSelectedList() {
       <span style="color:${ratioColor};" title="Статус щільності реклами">${ratioEmoji}</span>
     `;
 
-    // Анімація: блимає 2 рази — тільки коли кількість міток змінилась
-    if (lastStatsAdCount !== actualAds) {
-      lastStatsAdCount = actualAds;
-      try {
-        const isGustoOrMaluv = ratioEmoji.includes('Густо') || ratioEmoji.includes('Малувато');
-        const glowSize = isGustoOrMaluv ? '6px' : '12px';
-        const pulseCount = isGustoOrMaluv ? [
-          // Одне м'яке мерехтіння
-          { boxShadow: '0 0 0px transparent', borderColor: '#333' },
-          { boxShadow: `0 0 ${glowSize} ${ratioColor}`, borderColor: ratioColor, offset: 0.5 },
-          { boxShadow: '0 0 0px transparent', borderColor: '#333' }
-        ] : [
-          // Стандартні 2 спалахи для Люкс / До 8 хв
-          { boxShadow: '0 0 0px transparent', borderColor: '#333' },
-          { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
-          { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
-          { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
-          { boxShadow: '0 0 0px transparent', borderColor: '#333' }
-        ];
-        stats.animate(pulseCount, { duration: 1200, easing: 'ease-in-out' });
-      } catch (e) { }
+    // ── Постійне пульсування для проблемних статусів ──
+    const isGusto = ratioEmoji.includes('Густо');
+    const isMaluv = ratioEmoji.includes('Малувато');
+
+    // Знімаємо всі попередні анімаційні класи
+    stats.classList.remove('mra-pulse-red', 'mra-pulse-yellow');
+
+    if (isGusto) {
+      // 🔥 Густо — постійне червоне пульсування (не дратує, просто нагадує)
+      stats.classList.add('mra-pulse-red');
+    } else if (isMaluv) {
+      // ⚠️ Малувато — постійне жовте пульсування
+      stats.classList.add('mra-pulse-yellow');
+    } else {
+      // ✅ Люкс — одноразовий подвійний спалах через animate()
+      if (lastStatsAdCount !== actualAds) {
+        try {
+          stats.animate([
+            { boxShadow: '0 0 0px transparent', borderColor: '#333' },
+            { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
+            { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
+            { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
+            { boxShadow: '0 0 0px transparent', borderColor: '#333' }
+          ], { duration: 1200, easing: 'ease-in-out' });
+        } catch (e) { }
+      }
     }
+
+    lastStatsAdCount = actualAds;
   } else if (stats) {
+    stats.classList.remove('mra-pulse-red', 'mra-pulse-yellow');
     stats.style.display = 'none';
   }
 
