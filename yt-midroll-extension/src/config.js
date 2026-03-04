@@ -1,4 +1,5 @@
 var CONFIG = {
+  autoOpenPanel: true,
   autoGap: true,
   minGapSec: 120,
   shortVideoCutoff: 600,
@@ -19,6 +20,7 @@ var state = {
   cachedAudioBuffer: null,
   cachedAudioUrl: null,
   analyzing: false,       // Захист від одночасного запуску
+  inserting: false,       // Захист від подвійного запуску вставки
   insertAbort: false,     // Для зупинки вставки
 };
 

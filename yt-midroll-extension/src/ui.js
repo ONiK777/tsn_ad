@@ -32,6 +32,9 @@ function _restoreSettingsToUI() {
   const focusCb = document.getElementById('mra-focus-start');
   if (focusCb) focusCb.checked = CONFIG.focusStart;
 
+  const autoOpenCb = document.getElementById('mra-auto-open');
+  if (autoOpenCb) autoOpenCb.checked = CONFIG.autoOpenPanel;
+
   const autoGapCb = document.getElementById('mra-auto-gap');
   if (autoGapCb) {
     autoGapCb.checked = CONFIG.autoGap;
@@ -116,6 +119,10 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
       <div class="mtw">
         <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
         <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 Більше реклами на початку (x5 буст)</span>
+      </div>
+      <div class="mtw" style="margin-top:6px;">
+        <label class="mt"><input type="checkbox" id="mra-auto-open" checked><span class="msl"></span></label>
+        <span class="mtl">🔄 Автоматично відкривати панель</span>
       </div>
     </div>
   </div>
@@ -290,6 +297,14 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   const focusStartCb = document.getElementById('mra-focus-start');
   if (focusStartCb) focusStartCb.addEventListener('change', triggerAutoAnalyze);
 
+  const autoOpenCbEvt = document.getElementById('mra-auto-open');
+  if (autoOpenCbEvt) {
+    autoOpenCbEvt.addEventListener('change', () => {
+      CONFIG.autoOpenPanel = autoOpenCbEvt.checked;
+      saveSettings();
+    });
+  }
+
   // ── Аналізувати ──
   document.getElementById('mra-analyze').addEventListener('click', async () => {
     updateStatus('⏳ Аналізуємо...', 'info');
@@ -350,19 +365,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
-    const trashPath = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
-    const svgs = document.querySelectorAll(`path[d="${trashPath}"]`);
-
-    let deleteBtns = [];
-    svgs.forEach(path => {
-      let btn = path.closest('ytcp-icon-button') || path.closest('button') || path.closest('[role="button"]');
-      if (btn && btn.offsetParent !== null && !btn.disabled) {
-        const innerBtn = btn.querySelector('button');
-        deleteBtns.push(innerBtn || btn);
-      }
-    });
-
-    deleteBtns = [...new Set(deleteBtns)];
+    const deleteBtns = getAdBreakDeleteButtons();
 
     if (deleteBtns.length === 0) {
       log('Не знайдено міток для видалення', 'warn');

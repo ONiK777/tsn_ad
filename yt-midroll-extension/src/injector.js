@@ -26,7 +26,7 @@ window.addEventListener('message', function (event) {
       return;
     }
 
-    // SPA-навігація: якщо URL змінився — скидаємо кеш старого відео
+    // SPA-навігація: якщо URL змінився — скидаємо кеш старого відео та оновлюємо UI
     if (state.waveformUrl && state.waveformUrl !== url) {
       state.cachedAudioBuffer = null;
       state.cachedAudioUrl = null;
@@ -34,6 +34,8 @@ window.addEventListener('message', function (event) {
       state.silences = [];
       state.selected = [];
       log('🔄 Нове відео виявлено — кеш скинуто', 'info');
+      renderSelectedList();
+      renderWaveform();
     }
 
     state.waveformUrl = url;

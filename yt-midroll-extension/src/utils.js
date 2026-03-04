@@ -87,9 +87,15 @@ function findInsertAdBreakButton() {
 }
 
 function findConfirmButton() {
-  for (const btn of document.querySelectorAll('ytcp-dialog button, .ytcp-dialog button')) {
-    const t = btn.textContent?.toLowerCase() || '';
-    if (['insert', 'вставити', 'ok', 'confirm', 'підтвердити'].some(v => t.includes(v))) return btn;
+  // Шукаємо тільки у ВИДИМИХ діалогах (не в прихованих/закритих)
+  const dialogs = document.querySelectorAll('ytcp-dialog, .ytcp-dialog');
+  for (const dialog of dialogs) {
+    if (dialog.hasAttribute('hidden') || dialog.style.display === 'none' || !dialog.offsetParent) continue;
+    for (const btn of dialog.querySelectorAll('button')) {
+      if (!btn.offsetParent) continue; // Пропускаємо невидимі кнопки
+      const t = btn.textContent?.toLowerCase() || '';
+      if (['ok', 'confirm', 'підтвердити'].some(v => t.includes(v))) return btn;
+    }
   }
   return null;
 }
@@ -136,6 +142,7 @@ function readSettings() {
     CONFIG.silenceThresholdPct = _clamp(getVal('mra-threshold'), 1, 50, 15);
 
     CONFIG.focusStart = document.getElementById('mra-focus-start')?.checked ?? true;
+    CONFIG.autoOpenPanel = document.getElementById('mra-auto-open')?.checked ?? true;
     CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
 
     CONFIG.minGapSec = _clamp(getVal('mra-min-gap'), 10, 7200, 180);
@@ -153,7 +160,7 @@ function readSettings() {
 }
 
 // ─── ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ НАЛАШТУВАНЬ ───────────────────────────────────
-var SETTINGS_KEYS = ['minSilenceSec', 'silenceThresholdPct', 'focusStart', 'autoGap',
+var SETTINGS_KEYS = ['autoOpenPanel', 'minSilenceSec', 'silenceThresholdPct', 'focusStart', 'autoGap',
   'minGapSec', 'shortVideoCutoff', 'longVideoGapSec', 'shortVideoGapSec'];
 
 function saveSettings() {
@@ -185,6 +192,7 @@ function loadSettings() {
 
 function resetSettings() {
   const defaults = {
+    autoOpenPanel: true,
     autoGap: true,
     minGapSec: 120,
     shortVideoCutoff: 600,
@@ -193,7 +201,6 @@ function resetSettings() {
     minSilenceSec: 1.5,
     silenceThresholdPct: 15,
     focusStart: true,
-    actionDelay: 700,
   };
   Object.assign(CONFIG, defaults);
   try {

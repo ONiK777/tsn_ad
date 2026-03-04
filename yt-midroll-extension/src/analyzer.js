@@ -476,6 +476,11 @@ async function _doAnalyze() {
   state.selected = selectedCands;
   state.selected.sort((a, b) => a.seconds - b.seconds);
 
+  // Дедуплікація: видаляємо мітки ближче ніж 3 секунди одна від одної
+  state.selected = state.selected.filter((s, i, arr) =>
+    i === 0 || s.seconds - arr[i - 1].seconds >= 3
+  );
+
   console.group('%c🎬 [MRA] Відібрані реальні паузи', 'color:#06d6a0;font-weight:bold');
   state.selected.forEach((s, i) =>
     console.log(`  ${i + 1}. ${s.timecode}  (пауза: ${s.duration_sec}с, амп: ${s.amplitude})`)
@@ -509,10 +514,33 @@ async function _doAnalyze() {
 }
 
 // ─── АВТОВСТАВКА ─────────────────────────────────────────────────────────────
+// СТРАТЕГІЯ: Вставляємо мітку → вводимо таймкод → видаляємо дублікат якщо YouTube створив зайвий
+
+// Знаходимо всі кнопки видалення (trash) в YouTube Studio ad breaks editor
+var AD_BREAK_TRASH_PATH = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z';
+
+function getAdBreakDeleteButtons() {
+  const btns = [];
+  document.querySelectorAll(`path[d="${AD_BREAK_TRASH_PATH}"]`).forEach(path => {
+    let el = path.closest('ytcp-icon-button') || path.closest('button') || path.closest('[role="button"]');
+    if (el && el.offsetParent !== null && !el.disabled) {
+      const inner = el.querySelector('button');
+      btns.push(inner || el);
+    }
+  });
+  return [...new Set(btns)];
+}
+
 async function insertTimecodes() {
+  if (state.inserting) {
+    log('⚠️ Вставка вже виконується, зачекайте...', 'warn');
+    return;
+  }
+
   const silences = state.selected;
   if (!silences.length) return;
 
+  state.inserting = true;
   state.insertAbort = false;
   updateStatus(`⏳ Вставляємо ${silences.length} таймкоди...`, 'info');
   updateProgress(0, silences.length);
@@ -529,55 +557,45 @@ async function insertTimecodes() {
     log(`[${idx + 1}/${silences.length}] Вставка: ${s.timecode}`, 'info');
 
     try {
+      // Запам'ятовуємо кнопки видалення ДО вставки (для виявлення дублів)
+      const deleteBtnsBefore = getAdBreakDeleteButtons();
       const inputsBefore = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
 
+      // 1. Клікаємо "Insert ad break"
       const btn = findInsertAdBreakButton();
       if (!btn) throw new Error('Кнопка вставки не знайдена');
       btn.click();
       await sleep(CONFIG.actionDelay);
 
+      // 2. Знаходимо новий input для таймкоду
       let input = null;
       const maxAttempts = 20;
       const baseDelay = 150;
 
       for (let attempts = 0; attempts < maxAttempts; attempts++) {
-        // Стратегія 1: activeElement
         const activeEl = document.activeElement;
         if (activeEl && activeEl.tagName === 'INPUT' &&
           (activeEl.classList.contains('ytcp-media-timestamp-input') || activeEl.placeholder?.includes('00:00'))) {
           input = activeEl;
-          log(`✅ Знайдено input через activeElement (спроба ${attempts + 1})`, 'success');
           break;
         }
 
-        // Стратегія 2: DOM diff
         const inputsAfter = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
         const newInputs = inputsAfter.filter(el =>
           !inputsBefore.includes(el) &&
           (el.classList.contains('ytcp-media-timestamp-input') || el.placeholder?.includes('00:00'))
         );
+        if (newInputs.length > 0) { input = newInputs[0]; break; }
 
-        if (newInputs.length > 0) {
-          input = newInputs[0];
-          log(`✅ Знайдено input через DOM diff (спроба ${attempts + 1})`, 'success');
-          break;
-        }
-
-        // Стратегія 3: останній видимий
         if (attempts > 5) {
           const allTimeInputs = inputsAfter.filter(inp =>
             inp.offsetParent !== null &&
             (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00'))
           );
-          if (allTimeInputs.length > 0) {
-            input = allTimeInputs[allTimeInputs.length - 1];
-            log(`⚠️ Використано fallback: останній видимий input (спроба ${attempts + 1})`, 'warn');
-            break;
-          }
+          if (allTimeInputs.length > 0) { input = allTimeInputs[allTimeInputs.length - 1]; break; }
         }
 
-        const delay = baseDelay + (attempts * 20);
-        await sleep(delay);
+        await sleep(baseDelay + (attempts * 20));
       }
 
       if (!input) {
@@ -587,76 +605,54 @@ async function insertTimecodes() {
 
       if (!input) throw new Error('Поле вводу часу не з\'явилося!');
 
-      // Більша затримка для першого поля (React ініціалізація)
       if (idx === 0) await sleep(1200);
       else await sleep(200);
 
-      const typeTimecode = async () => {
-        input.focus(); await sleep(100);
-        input.select(); await sleep(50);
+      // 3. Вводимо таймкод (оригінальний метод який працює для значень)
+      input.focus();
+      await sleep(100);
+      input.select();
+      await sleep(50);
 
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8, bubbles: true }));
-        await sleep(50);
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSetter.call(input, s.timecode);
 
-        try {
-          const inputEvent = new InputEvent('beforeinput', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: s.timecode
-          });
+      input.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, inputType: 'insertText', data: s.timecode
+      }));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(500);
 
-          input.dispatchEvent(inputEvent);
+      // 4. Enter для підтвердження
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+      await sleep(500);
 
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSetter.call(input, s.timecode);
+      // 5. Підтвердження діалогу (якщо є)
+      const confirmBtn = findConfirmButton();
+      if (confirmBtn) { confirmBtn.click(); await sleep(300); }
 
-          input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: s.timecode }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        } catch (err) {
-          log('⚠️ Fallback на execCommand: ' + err.message, 'warn');
-          if (document.execCommand) {
-            document.execCommand('insertText', false, s.timecode);
-          }
-        }
+      await sleep(500);
 
-        await sleep(400);
-      };
+      // 6. ВИДАЛЕННЯ ДУБЛІКАТІВ: порівнюємо кількість trash-кнопок до і після
+      const deleteBtnsAfter = getAdBreakDeleteButtons();
+      const newDeleteBtns = deleteBtnsAfter.filter(b => !deleteBtnsBefore.includes(b));
+      const created = newDeleteBtns.length;
 
-      await typeTimecode();
-
-      // Перевірка: чи React скинув ввід на 00:00:00?
-      let val = (input.value || '').replace(/[^0-9]/g, '');
-      const isStillZero = !val || val === '00000000' || val === '000000';
-
-      if (isStillZero) {
-        log('⚠️ React заблокував ввід (fallback #1). Перезаписуємо...', 'warn');
-        input.blur(); await sleep(300);
-
-        await typeTimecode();
-        val = (input.value || '').replace(/[^0-9]/g, '');
-
-        if (!val || val === '00000000' || val === '000000') {
-          log('⚠️ Жорсткий рівень 2 (Native Setter)...', 'error');
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeInputValueSetter.call(input, s.timecode);
-          input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-          await sleep(200);
-          input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      if (created > 1) {
+        log(`⚠️ YouTube створив ${created} записів замість 1, видаляємо ${created - 1} зайвих...`, 'warn');
+        // Видаляємо зайві (залишаємо перший новий, решту — видаляємо)
+        for (let d = 1; d < newDeleteBtns.length; d++) {
+          newDeleteBtns[d].click();
           await sleep(300);
         }
+        await sleep(300);
       }
-
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-      await sleep(300);
-
-      const confirmBtn = findConfirmButton();
-      if (confirmBtn) confirmBtn.click();
 
       ok++;
       updateProgress(ok, silences.length);
       log(`✅ ${s.timecode} вставлено`, 'success');
-      await sleep(1000);
+      await sleep(800);
     } catch (e) {
       fail++;
       log(`❌ ${s.timecode}: ${e.message}`, 'error');
@@ -666,6 +662,7 @@ async function insertTimecodes() {
   }
 
   showStopButton(false);
+  state.inserting = false;
 
   const aborted = state.insertAbort;
   state.insertAbort = false;

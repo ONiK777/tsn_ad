@@ -5,6 +5,10 @@ async function init() {
   // Завантажуємо збережені налаштування
   await loadSettings();
 
+  if (CONFIG.autoOpenPanel === false) {
+    isPanelClosedByUser = true;
+  }
+
   var observerTimer = null;
   const observer = new MutationObserver(() => {
     // Debounce: не реагуємо на кожну мікрозміну DOM
