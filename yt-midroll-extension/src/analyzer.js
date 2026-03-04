@@ -185,8 +185,20 @@ async function _doAnalyze() {
     return false;
   }
 
-  if (duration < 60) {
-    updateStatus('⚠️ Відео занадто коротке (< 1 хв) для реклами', 'warn');
+  if (duration < 480) {
+    updateStatus('⚠️ Відео до 8 хв (Реклама недоступна)', 'warn');
+    log('Відео менше 8 хвилин (YouTube забороняє mid-roll рекламу)', 'warn');
+
+    // Очищаємо всі поточні дані/міточки, не пропускаємо далі
+    state.waveformData = null;
+    state.silences = [];
+    state.selected = [];
+
+    const uiList = document.getElementById('mra-list');
+    const uiStats = document.getElementById('mra-stats');
+    if (uiList) uiList.innerHTML = '';
+    if (uiStats) uiStats.style.display = 'none';
+
     return false;
   }
 

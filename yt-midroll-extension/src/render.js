@@ -34,26 +34,36 @@ function renderSelectedList() {
     const expectedGap = CONFIG.autoGap ? (isShort ? CONFIG.shortVideoGapSec : CONFIG.longVideoGapSec) : CONFIG.minGapSec;
 
     let idealAds = Math.floor(duration / expectedGap);
-    if (idealAds < 1 && duration > 60) idealAds = 1;
-    if (duration < 60) idealAds = 0;
+
+    // Ютуб дозволяє мідроли тільки для відео від 8 хвилин (480 сек)
+    if (duration < 480) {
+      idealAds = 0;
+    } else if (idealAds < 1) {
+      idealAds = 1;
+    }
 
     const actualAds = state.selected.length;
 
     let ratioEmoji = '✅ Люкс';
     let ratioColor = '#06d6a0';
 
-    if (actualAds === 0 && idealAds > 0) {
+    if (duration < 480) {
+      ratioEmoji = '⏳ До 8 хв (Без реклами)';
+      ratioColor = '#888888';
+    } else if (actualAds === 0) {
       ratioEmoji = '❌ Немає';
       ratioColor = '#ff6b6b';
-    } else if (actualAds < Math.max(1, idealAds - 1)) {
+    } else if (actualAds <= idealAds - 2 && idealAds >= 3) {
+      // Якщо ідеал 5, а по факту 3 або менше - це вже малувато
       ratioEmoji = '⚠️ Малувато';
       ratioColor = '#ffd166';
-    } else if (actualAds > idealAds + 2 && idealAds !== 0) {
+    } else if (actualAds < idealAds && idealAds < 3) {
+      // Для коротких відео де ідеал 1-2
+      ratioEmoji = '⚠️ Малувато';
+      ratioColor = '#ffd166';
+    } else if (actualAds > idealAds + 2) {
       ratioEmoji = '🔥 Густо';
       ratioColor = '#ff6b6b';
-    } else if (actualAds === 0 && idealAds === 0) {
-      ratioEmoji = '✅ Коротке';
-      ratioColor = '#06d6a0';
     }
 
     const min = Math.floor(duration / 60);
