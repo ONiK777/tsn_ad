@@ -567,133 +567,51 @@ async function insertTimecodes() {
     log(`[${idx + 1}/${pendingSilences.length}] Вставка: ${s.timecode}`, 'info');
 
     try {
-      // Запам'ятовуємо кнопки видалення ДО вставки (для виявлення дублів)
+      // 1. Запам'ятовуємо кількість міток ДО
       const deleteBtnsBefore = getAdBreakDeleteButtons();
-      const inputsBefore = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
 
-      // 0. Відмотуємо сам плеєр до потрібного часу ПЕРЕД тим як тиснути "+"
+      // 2. ІМІТАЦІЯ ЛЮДИНИ: Вводимо час в ГОЛОВНИЙ інпут плеєра (перемотуємо відео)
+      const timeInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, ytcp-media-timestamp-input input'));
+      const mainInput = timeInputs.find(inp => inp.offsetParent !== null); // Беремо перше видиме поле (це завжди таймкод під відео)
+
+      // Одночасно страхуємось через HTML5 API
       const videoEl = document.querySelector('video');
       if (videoEl) {
         videoEl.currentTime = s.seconds;
         videoEl.dispatchEvent(new Event('timeupdate', { bubbles: true }));
         videoEl.dispatchEvent(new Event('seeked', { bubbles: true }));
-        await sleep(400); // Чекаємо щоб YouTube Studio оновив свій внутрішній стан повзунка
       }
 
-      // 1. Клікаємо "Insert ad break"
+      if (mainInput) {
+        mainInput.focus();
+        await sleep(100);
+        mainInput.select();
+        await sleep(100);
+
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        try {
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, s.timecode);
+        } catch (e) {
+          nativeSetter.call(mainInput, s.timecode);
+          mainInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        mainInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+        await sleep(800); // Чекаємо поки відео гарантовано відмотається
+      } else {
+        await sleep(600); // Якщо поле не знайшли — чекаємо після HTML5 перемотки
+      }
+
+      // 3. Тиснемо кнопку "Вставити рекламне місце"
+      // Мітка тепер гарантовано впаде туди, де стоїть повзунок!
       const btn = findInsertAdBreakButton();
       if (!btn) throw new Error('Кнопка вставки не знайдена');
       btn.click();
-      await sleep(CONFIG.actionDelay);
 
-      // 2. Знаходимо новий input для таймкоду
-      let input = null;
-      const maxAttempts = 20;
-      const baseDelay = 150;
+      await sleep(600); // Чекаємо поки YouTube збереже мітку в свій список
 
-      for (let attempts = 0; attempts < maxAttempts; attempts++) {
-        const activeEl = document.activeElement;
-        if (activeEl && activeEl.tagName === 'INPUT' &&
-          (activeEl.classList.contains('ytcp-media-timestamp-input') || activeEl.placeholder?.includes('00:00'))) {
-          input = activeEl;
-          break;
-        }
-
-        const inputsAfter = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, input[type="text"]'));
-        const newInputs = inputsAfter.filter(el =>
-          !inputsBefore.includes(el) &&
-          (el.classList.contains('ytcp-media-timestamp-input') || el.placeholder?.includes('00:00'))
-        );
-        if (newInputs.length > 0) { input = newInputs[0]; break; }
-
-        if (attempts > 5) {
-          const allTimeInputs = inputsAfter.filter(inp =>
-            inp.offsetParent !== null &&
-            (inp.classList.contains('ytcp-media-timestamp-input') || inp.placeholder?.includes('00:00'))
-          );
-          if (allTimeInputs.length > 0) { input = allTimeInputs[allTimeInputs.length - 1]; break; }
-        }
-
-        await sleep(baseDelay + (attempts * 20));
-      }
-
-      if (!input) {
-        const allTimeInputs = document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]');
-        if (allTimeInputs.length > 0) input = allTimeInputs[allTimeInputs.length - 1];
-      }
-
-      if (!input) throw new Error('Поле вводу часу не з\'явилося!');
-
-      if (idx === 0) await sleep(1200);
-      else await sleep(200);
-
-      // 3. Агресивний ввід таймкоду (обхід React)
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      const expectedVal = s.timecode.replace(/[^0-9]/g, '');
-
-      const refreshInput = () => {
-        // React часто перемальовує DOM-вузол — шукаємо найсвіжіший інпут
-        const allTimeInputs = document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]');
-        if (allTimeInputs.length > 0) {
-          input = allTimeInputs[allTimeInputs.length - 1];
-        }
-        return input && document.body.contains(input);
-      };
-
-      const checkValue = () => {
-        return (input.value || '').replace(/[^0-9]/g, '') === expectedVal;
-      };
-
-      const typeTimecode = async (method) => {
-        if (!refreshInput()) return false;
-
-        input.focus();
-        await sleep(100);
-        input.select();
-        await sleep(50);
-
-        if (method === 'execCommand') {
-          // Спосіб 1: execCommand — найприродніший для React (імітує справжній набір тексту)
-          try {
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, s.timecode);
-          } catch (err) { return false; }
-        } else {
-          // Спосіб 2: Native Setter + ручні події — fallback
-          nativeSetter.call(input, s.timecode);
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
-        await sleep(300);
-        return checkValue();
-      };
-
-      // Пробуємо execCommand (найкращий для React)
-      let success = await typeTimecode('execCommand');
-
-      // Fallback 1: Native Setter
-      if (!success) {
-        log('⚠️ execCommand не спрацював, fallback на nativeSetter...', 'warn');
-        success = await typeTimecode('nativeSetter');
-      }
-
-      // Fallback 2: blur + повторна спроба
-      if (!success) {
-        log('⚠️ React заблокував ввід, жорсткий retry...', 'warn');
-        input.blur();
-        await sleep(300);
-        success = await typeTimecode('execCommand');
-        if (!success) await typeTimecode('nativeSetter');
-      }
-
-      await sleep(200);
-
-      // 4. Enter для підтвердження
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-      await sleep(300);
-
-      // 5. Підтвердження діалогу (якщо є)
+      // Підтвердження діалогу (якщо раптом вилізе)
       const confirmBtn = findConfirmButton();
       if (confirmBtn) { confirmBtn.click(); await sleep(300); }
 
