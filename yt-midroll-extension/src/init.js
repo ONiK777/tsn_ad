@@ -92,6 +92,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       saveSettings(); // utils.js збереже у localStorage сторінки
       sendResponse({ success: true });
     }
+    return true;
   }
 });
 

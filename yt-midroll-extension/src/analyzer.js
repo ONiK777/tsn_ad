@@ -617,17 +617,20 @@ async function insertTimecodes() {
 
       await sleep(500);
 
-      // 6. ВИДАЛЕННЯ ДУБЛІКАТІВ: порівнюємо кількість trash-кнопок до і після
+      // 6. ВИДАЛЕННЯ ДУБЛІКАТІВ: порівнюємо КІЛЬКІСТЬ trash-кнопок до і після
+      // Порівнюємо за count, а не за reference — бо YouTube може перемалювати DOM
       const deleteBtnsAfter = getAdBreakDeleteButtons();
-      const newDeleteBtns = deleteBtnsAfter.filter(b => !deleteBtnsBefore.includes(b));
-      const created = newDeleteBtns.length;
+      const created = deleteBtnsAfter.length - deleteBtnsBefore.length;
 
       if (created > 1) {
         log(`⚠️ YouTube створив ${created} записів замість 1, видаляємо ${created - 1} зайвих...`, 'warn');
-        // Видаляємо зайві (залишаємо перший новий, решту — видаляємо)
-        for (let d = 1; d < newDeleteBtns.length; d++) {
-          newDeleteBtns[d].click();
-          await sleep(300);
+        // Видаляємо зайві з кінця списку (останні додані — останні в DOM)
+        for (let d = 0; d < created - 1; d++) {
+          const currentBtns = getAdBreakDeleteButtons();
+          if (currentBtns.length > 0) {
+            currentBtns[currentBtns.length - 1].click();
+            await sleep(300);
+          }
         }
         await sleep(300);
       }

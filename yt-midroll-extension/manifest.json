@@ -10,8 +10,7 @@
   },
   "permissions": [],
   "host_permissions": [
-    "https://studio.youtube.com/*",
-    "https://www.youtube.com/*"
+    "https://studio.youtube.com/*"
   ],
   "background": {
     "service_worker": "background.js"

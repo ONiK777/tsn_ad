@@ -126,7 +126,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     <div style="margin-top:8px;">
       <div class="mtw">
         <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
-        <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 Більше реклами на початку (x5 буст)</span>
+        <span class="mtl" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 Більше реклами на початку (x2 буст)</span>
       </div>
       <div class="mtw" style="margin-top:6px;">
         <label class="mt"><input type="checkbox" id="mra-auto-open" checked><span class="msl"></span></label>
@@ -160,7 +160,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   <button id="mra-analyze">🔴 Аналізувати паузи</button>
 
   <div class="ms" id="mra-waveform-section" style="display:none;">
-    <div class="mst">🌊 Вейвформа (те, що бачить бот ВАЛЕРА)</div>
+    <div class="mst">🌊 Вейвформа<br><span style="color:#888;text-transform:none;font-size:9.5px;font-weight:400;margin-top:2px;display:block;">(те, що бачить ваш віртуальний колега ВАЛЕРА)</span></div>
     <canvas id="mra-waveform" width="282" height="80" style="width:100%;border:1px solid #333;border-radius:6px;cursor:crosshair;background:#1a1a1a;" title="Клік = додати/видалити мітку"></canvas>
     <div style="color:#666;font-size:9px;margin-top:3px;">
       <span style="color:#e60000;">━</span> = авто-паузи |
@@ -200,12 +200,14 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   // ── Авто-перерахунок при зміні налаштувань ──
   let analyzeTimer = null;
   function triggerAutoAnalyze() {
-    if (state.cachedAudioBuffer) {
-      clearTimeout(analyzeTimer);
-      analyzeTimer = setTimeout(() => {
+    clearTimeout(analyzeTimer);
+    analyzeTimer = setTimeout(() => {
+      readSettings();
+      saveSettings();
+      if (state.cachedAudioBuffer) {
         analyzeWaveform().catch(e => console.error(e));
-      }, 250);
-    }
+      }
+    }, 250);
   }
 
   // ── Прив'язуємо stepper-кнопки (−/+) до всіх контролів ──

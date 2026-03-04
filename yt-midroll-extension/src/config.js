@@ -8,7 +8,6 @@ var CONFIG = {
   minSilenceSec: 1.5,
   silenceThresholdPct: 15,
   focusStart: true,
-  actionDelay: 700,
 };
 
 // ─── СТАН ────────────────────────────────────────────────────────────────────

@@ -183,9 +183,6 @@ function readSettings() {
     CONFIG.longVideoGapSec = _clamp(getVal('mra-long-gap'), 1, 3600, 120);
     CONFIG.shortVideoGapSec = _clamp(getVal('mra-short-gap'), 1, 600, 60);
 
-    // Зберігаємо налаштування для наступної сесії
-    saveSettings();
-
     log(`Налаштування: gap=${CONFIG.autoGap ? 'auto' : CONFIG.minGapSec + 's'}`, 'info');
   } catch (error) {
     log('⚠️ Помилка читання налаштувань, використовуємо defaults: ' + error.message, 'warn');
