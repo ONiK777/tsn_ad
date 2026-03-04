@@ -162,6 +162,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
     </div>
   </div>
 
+  <div id="mra-stats" style="display:none; padding:8px; margin-bottom:8px; background:#1a1a1a; border-radius:6px; border:1px solid #333; text-align:center; font-size:12px; font-weight:600;"></div>
   <div id="mra-list"></div>
   <hr id="mra-divider">
   <button id="mra-insert" disabled>⚡ Вставити маркери</button>

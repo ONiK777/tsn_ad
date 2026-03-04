@@ -23,7 +23,54 @@ function showStopButton(show) {
 
 function renderSelectedList() {
   const list = document.getElementById('mra-list');
+  const stats = document.getElementById('mra-stats');
   if (!list) return;
+
+  if (stats && state.waveformData && state.waveformData.duration > 0) {
+    stats.style.display = 'block';
+
+    const duration = state.waveformData.duration;
+    const isShort = duration < CONFIG.shortVideoCutoff;
+    const expectedGap = CONFIG.autoGap ? (isShort ? CONFIG.shortVideoGapSec : CONFIG.longVideoGapSec) : CONFIG.minGapSec;
+
+    let idealAds = Math.floor(duration / expectedGap);
+    if (idealAds < 1 && duration > 60) idealAds = 1;
+    if (duration < 60) idealAds = 0;
+
+    const actualAds = state.selected.length;
+
+    let ratioEmoji = '✅ Люкс';
+    let ratioColor = '#06d6a0';
+
+    if (actualAds === 0 && idealAds > 0) {
+      ratioEmoji = '❌ Немає';
+      ratioColor = '#ff6b6b';
+    } else if (actualAds < Math.max(1, idealAds - 1)) {
+      ratioEmoji = '⚠️ Малувато';
+      ratioColor = '#ffd166';
+    } else if (actualAds > idealAds + 2 && idealAds !== 0) {
+      ratioEmoji = '🔥 Густо';
+      ratioColor = '#ff6b6b';
+    } else if (actualAds === 0 && idealAds === 0) {
+      ratioEmoji = '✅ Коротке';
+      ratioColor = '#06d6a0';
+    }
+
+    const min = Math.floor(duration / 60);
+    const sec = Math.floor(duration % 60);
+    const durStr = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+
+    stats.innerHTML = `
+      <span style="color:#888;" title="Хронометраж відео">⏱️ ${durStr}</span>
+      &nbsp;|&nbsp;
+      <span style="color:#ccc;">Міт.: <b style="color:#fff">${actualAds}</b> <span style="font-size:10px;color:#666;" title="Ідеальна кількість реклам для такого хронометражу">(ідеал ~${idealAds})</span></span> 
+      &nbsp;|&nbsp;
+      <span style="color:${ratioColor};" title="Статус щільності реклами">${ratioEmoji}</span>
+    `;
+  } else if (stats) {
+    stats.style.display = 'none';
+  }
+
   list.innerHTML = '';
   state.selected.forEach((s, i) => {
     const item = document.createElement('div');
