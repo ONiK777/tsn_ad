@@ -77,6 +77,20 @@ function renderSelectedList() {
       &nbsp;|&nbsp;
       <span style="color:${ratioColor};" title="Статус щільності реклами">${ratioEmoji}</span>
     `;
+
+    // Анімація: блимає 2 рази (підсвітка межі та тіні) щоб звернути увагу
+    try {
+      stats.animate([
+        { boxShadow: '0 0 0px transparent', borderColor: '#333' },
+        { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
+        { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
+        { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
+        { boxShadow: '0 0 0px transparent', borderColor: '#333' }
+      ], {
+        duration: 1200,
+        easing: 'ease-in-out'
+      });
+    } catch (e) { }
   } else if (stats) {
     stats.style.display = 'none';
   }
@@ -161,7 +175,7 @@ function renderWaveform() {
 
   // Сигнатура лише для статичного фону (вейвформа + поріг + паузи)
   // Маркери малюються поверх offscreen — їх зміна НЕ потребує перемальовування фону
-  const signature = `${totalBlocks}_${threshold}_${state.silences.length}`;
+  const signature = `${totalBlocks}_${threshold}_${state.silences.length} `;
 
   const needsRedraw = lastRenderSignature !== signature;
 
@@ -240,7 +254,7 @@ function renderWaveform() {
 
     ctx.fillStyle = isManual ? '#ffffff' : 'rgba(201, 28, 28, 1)';
     ctx.font = 'bold 11px Arial';
-    const label = isManual ? `✋${i + 1}` : (i + 1).toString();
+    const label = isManual ? `✋${i + 1} ` : (i + 1).toString();
     ctx.fillText(label, x + 4, 12);
   });
 
