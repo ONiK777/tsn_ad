@@ -616,6 +616,15 @@ async function insertTimecodes() {
 
       // 3. Агресивний ввід таймкоду (обхід React)
       const typeTimecode = async () => {
+        // React часто вбиває та перемальовує DOM-вузол для першої реклами ("0" -> "1" list transition)
+        // Тому ми гарантовано шукаємо найсвіжіший інпут в DOM перед вводом
+        const allTimeInputs = document.querySelectorAll('input.ytcp-media-timestamp-input, input[placeholder*="00:00"]');
+        if (allTimeInputs.length > 0) {
+          input = allTimeInputs[allTimeInputs.length - 1]; // Беремо найновіший (останній) інпут
+        }
+
+        if (!input || !document.body.contains(input)) return; // Якщо інпут зник, відміна
+
         input.focus();
         await sleep(100);
         input.select();
