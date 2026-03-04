@@ -30,10 +30,9 @@ function renderSelectedList() {
     stats.style.display = 'block';
 
     const duration = state.waveformData.duration;
-    const isShort = duration < CONFIG.shortVideoCutoff;
-    const expectedGap = CONFIG.autoGap ? (isShort ? CONFIG.shortVideoGapSec : CONFIG.longVideoGapSec) : CONFIG.minGapSec;
 
-    let idealAds = Math.floor(duration / expectedGap);
+    // СТАНДАРТ ТСН: хронометраж ділимо на 2 (1 реклама кожні 2 хв / 120 сек)
+    let idealAds = Math.floor(duration / 120);
 
     // Ютуб дозволяє мідроли тільки для відео від 8 хвилин (480 сек)
     if (duration < 480) {
@@ -53,15 +52,12 @@ function renderSelectedList() {
     } else if (actualAds === 0) {
       ratioEmoji = '❌ Немає';
       ratioColor = '#ff6b6b';
-    } else if (actualAds <= idealAds - 2 && idealAds >= 3) {
-      // Якщо ідеал 5, а по факту 3 або менше - це вже малувато
-      ratioEmoji = '⚠️ Малувато';
-      ratioColor = '#ffd166';
-    } else if (actualAds < idealAds && idealAds < 3) {
-      // Для коротких відео де ідеал 1-2
+    } else if (actualAds < idealAds) {
+      // Суворе правило: якщо менше ділення на 2 — значить погано (мало)
       ratioEmoji = '⚠️ Малувато';
       ratioColor = '#ffd166';
     } else if (actualAds > idealAds + 2) {
+      // Якщо напхали на 3 реклами більше ідеалу
       ratioEmoji = '🔥 Густо';
       ratioColor = '#ff6b6b';
     }
