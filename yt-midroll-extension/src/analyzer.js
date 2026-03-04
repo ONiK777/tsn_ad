@@ -418,9 +418,10 @@ async function _doAnalyze() {
     // Не ставимо рекламу в самі останні 15 секунд відео
     if (target > duration - 15) break;
 
-    // Вікно пошуку пропорційно до currentGap
-    const windowStart = target - (currentGap * 0.4);
-    const windowEnd = target + (currentGap * 0.4);
+    // Вікно пошуку ±50% від gap — гарантує ПОВНЕ покриття без мертвих зон
+    // При ±40% між вікнами під час пропусків залишалась 70% мертва зона!
+    const windowStart = target - (currentGap * 0.5);
+    const windowEnd = target + (currentGap * 0.5);
 
     let bestPause = null;
     let bestScore = -Infinity;
@@ -431,7 +432,7 @@ async function _doAnalyze() {
       // Якщо пауза потрапляє у "вікно"
       if (p.seconds >= windowStart && p.seconds <= windowEnd) {
         const distance = Math.abs(p.seconds - target);
-        const distancePenalty = Math.pow(distance / (currentGap * 0.4), 2);
+        const distancePenalty = Math.pow(distance / (currentGap * 0.5), 2);
 
         // Оцінюємо якість (довша = краще, гучніша = гірше, дальша від центру = гірше)
         const score = p.duration_sec * 2 - (p.amplitude * 20) - distancePenalty;
@@ -443,22 +444,21 @@ async function _doAnalyze() {
       }
     }
 
-    // Fallback 1: Якщо у вікні НІЧОГО немає, беремо найближчу доступну паузу, але не далі ніж +80% gap
+    // Fallback: ширше вікно — до +80% gap вперед
     if (!bestPause) {
       const looseEnd = target + currentGap * 0.8;
       const fallback = sortedSilences.find(p => !usedPauses.has(p) && p.seconds >= windowStart && p.seconds <= looseEnd);
-      if (fallback) {
-        bestPause = fallback;
-      }
+      if (fallback) bestPause = fallback;
     }
 
-    // Якщо у вікні НІЧОГО немає — пропускаємо цей слот, рухаємо playhead вперед
-    // (НЕ ставимо "синтетичні" мітки без реальної паузи)
+    // Якщо НІЧОГО не знайдено — просуваємо playhead рівно на currentGap
+    // ⚠️ КРИТИЧНО: playhead = target (а не target + 0.5*gap!)
+    // Це гарантує що наступне вікно ПОЧИНАЄТЬСЯ там де ЗАКІНЧИЛОСЬ поточне
+    // і між вікнами НЕМАЄ мертвих зон куди можуть падати паузи!
     if (!bestPause) {
-      // Рухаємо playhead на наступний таргет щоб уникнути нескінченного циклу
-      playhead = target + currentGap * 0.5;
+      playhead = target; // = playhead + currentGap → вікна стикуються ідеально
       if (playhead > duration - 15) break;
-      log(`⚠️ Не знайдено паузи ≥${CONFIG.minSilenceSec}с у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)}, слот пропущено`, 'warn');
+      log(`⚠️ Не знайдено паузи у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)}, слот пропущено`, 'warn');
       continue;
     }
 
