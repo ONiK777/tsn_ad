@@ -244,6 +244,11 @@ function renderWaveform() {
 
   // ── Смислові зони між маркерами (колір = якість відстані) ──
   if (state.selected.length > 0) {
+    // Ідеальна відстань береться з налаштувань користувача
+    const idealGap = CONFIG.autoGap
+      ? (state.waveformData.duration < CONFIG.shortVideoCutoff ? CONFIG.shortVideoGapSec : CONFIG.longVideoGapSec)
+      : CONFIG.minGapSec;
+
     // Межі зон: 0 → мітка1 → мітка2 → ... → кінець відео
     const zoneBoundaries = [0, ...state.selected.map(s => s.seconds), duration];
 
@@ -253,17 +258,17 @@ function renderWaveform() {
       const x2 = (zoneBoundaries[z + 1] / duration) * w;
       const zoneW = x2 - x1;
 
-      // Колір зони залежить від тривалості відрізку
-      // Ідеал: ~120 сек (2 хв). < 60 сек = густо (червоний), 60-100 = жовтий, > 180 = блідо-жовтий
+      // Колір залежить від відхилення від ідеал (з налаштувань)
       let bgColor;
-      if (gapSec < 60) {
-        bgColor = 'rgba(255, 60, 60, 0.18)';   // червоний — дуже густо
-      } else if (gapSec < 100) {
-        bgColor = 'rgba(255, 200, 40, 0.14)';  // жовтий — trохи густо
-      } else if (gapSec <= 160) {
-        bgColor = 'rgba(60, 200, 100, 0.12)';  // зелений — ок (2 хв ±30с)
+      const ratio = gapSec / idealGap;
+      if (ratio < 0.5) {
+        bgColor = 'rgba(255, 60, 60, 0.18)';   // червоний — набагато коротше ідеалу
+      } else if (ratio < 0.8) {
+        bgColor = 'rgba(255, 200, 40, 0.14)';  // жовтий — коротше ідеалу
+      } else if (ratio <= 1.3) {
+        bgColor = 'rgba(60, 200, 100, 0.12)';  // зелений — в нормі (±30% від ідеалу)
       } else {
-        bgColor = 'rgba(100, 160, 255, 0.10)'; // блакитний — великий відрізок
+        bgColor = 'rgba(100, 160, 255, 0.10)'; // блакитний — довший за ідеал
       }
 
       ctx.fillStyle = bgColor;
