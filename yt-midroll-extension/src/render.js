@@ -78,16 +78,22 @@ function renderSelectedList() {
     if (lastStatsAdCount !== actualAds) {
       lastStatsAdCount = actualAds;
       try {
-        stats.animate([
+        const isGustoOrMaluv = ratioEmoji.includes('Густо') || ratioEmoji.includes('Малувато');
+        const glowSize = isGustoOrMaluv ? '6px' : '12px';
+        const pulseCount = isGustoOrMaluv ? [
+          // Одне м'яке мерехтіння
+          { boxShadow: '0 0 0px transparent', borderColor: '#333' },
+          { boxShadow: `0 0 ${glowSize} ${ratioColor}`, borderColor: ratioColor, offset: 0.5 },
+          { boxShadow: '0 0 0px transparent', borderColor: '#333' }
+        ] : [
+          // Стандартні 2 спалахи для Люкс / До 8 хв
           { boxShadow: '0 0 0px transparent', borderColor: '#333' },
           { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.25 },
           { boxShadow: '0 0 0px transparent', borderColor: '#333', offset: 0.5 },
           { boxShadow: `0 0 12px ${ratioColor}`, borderColor: ratioColor, offset: 0.75 },
           { boxShadow: '0 0 0px transparent', borderColor: '#333' }
-        ], {
-          duration: 1200,
-          easing: 'ease-in-out'
-        });
+        ];
+        stats.animate(pulseCount, { duration: 1200, easing: 'ease-in-out' });
       } catch (e) { }
     }
   } else if (stats) {
