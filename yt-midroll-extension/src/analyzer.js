@@ -407,8 +407,10 @@ async function _doAnalyze() {
     let currentGap = gap;
     if (CONFIG.focusStart) {
       const pos = playhead / duration;
-      // На початку трохи густіше (gap * 0.7), в кінці - стандартна норма (gap * 1.0)
-      currentGap = gap * (0.7 + (pos * 0.3));
+      // Буст x5 на початку: від gap*0.2 (початок) до gap*1.0 (кінець)
+      // pos=0 → currentGap = gap * 0.2 (у 5 разів частіше)
+      // pos=1 → currentGap = gap * 1.0 (стандартна норма)
+      currentGap = gap * (0.2 + (pos * 0.8));
     }
 
     let target = playhead + currentGap;
@@ -416,9 +418,11 @@ async function _doAnalyze() {
     // Не ставимо рекламу в самі останні 15 секунд відео
     if (target > duration - 15) break;
 
-    // Вікно пошуку навколо ідеальної цілі [-40% ... +40% gap]
-    const windowStart = target - (currentGap * 0.4);
-    const windowEnd = target + (currentGap * 0.4);
+    // Вікно пошуку ЗАВЖДИ на основі повного gap (не стисненого)
+    // Так буст не зменшує вікно і паузи краще знаходяться
+    const searchRadius = gap * 0.4;
+    const windowStart = target - searchRadius;
+    const windowEnd = target + searchRadius;
 
     let bestPause = null;
     let bestScore = -Infinity;
