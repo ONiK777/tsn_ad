@@ -753,8 +753,8 @@ async function insertTimecodes() {
       if (inputElement) {
         const val = inputElement.value || '';
         const cleanVal = val.replace(/[^0-9]/g, '');
-        // Якщо значення нульове або порожнє (React лишає пусте поле для 00:00:00)
-        if (cleanVal === '000000' || cleanVal === '00000000' || val === '00:00:00' || val.trim() === '') {
+        // Якщо значення нульове або порожнє (React лишає пусте поле для 00:00:00 або 0:00)
+        if (cleanVal === '' || /^0+$/.test(cleanVal)) {
           btn.click();
           garbageFound++;
           await sleep(350);
