@@ -289,13 +289,13 @@ function renderWaveform() {
       ctx.fillRect(x1, 0, zoneW, h);
 
       // Текст з тривалістю відрізку по центру зони (тільки якщо є місце)
-      if (zoneW > 22) {
+      if (zoneW > 28) {
         const gapMin = Math.floor(gapSec / 60);
         const gapRemSec = Math.floor(gapSec % 60);
         const gapLabel = gapMin > 0
-          ? `${gapMin}:${String(gapRemSec).padStart(2, '0')}`
-          : `${Math.floor(gapSec)}с`;
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+          ? `⏱${gapMin}:${String(gapRemSec).padStart(2, '0')}`
+          : `⏱${Math.floor(gapSec)}с`;
+        ctx.fillStyle = 'rgba(255,255,255,0.60)';
         ctx.font = 'bold 9px Arial';
         const textX = x1 + zoneW / 2 - ctx.measureText(gapLabel).width / 2;
         ctx.fillText(gapLabel, textX, h / 2 + 4);
