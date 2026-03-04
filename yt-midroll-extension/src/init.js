@@ -53,20 +53,29 @@ async function init() {
   startObserving();
 }
 
-// ── Слухач для кнопки розширення ──
+// ── Слухач для повідомлень з popup.js / background.js ──
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'mra_toggle_panel') {
+  if (request.action === 'mra_toggle_panel' || request.action === 'mra_force_open') {
     const panel = document.getElementById('mra-panel');
+    isPanelClosedByUser = false; // У будь-якому випадку скасовуємо "закриття"
+
+    // Якщо нас попросили примусово відкрити
+    if (request.action === 'mra_force_open') {
+      const btn = document.getElementById('mra-reopen-btn');
+      if (btn) btn.remove();
+      if (!panel) init(); // ініт сам створить панель оскільки isPanelClosedByUser = false
+      return;
+    }
+
+    // Стара логіка тогла (про всяк випадок, якщо потрібна)
     if (panel) {
       if (panel.style.display === 'none') {
         panel.style.display = '';
-        isPanelClosedByUser = false;
       } else {
         panel.style.display = 'none';
         isPanelClosedByUser = true;
       }
     } else {
-      isPanelClosedByUser = false;
       init();
     }
   }
