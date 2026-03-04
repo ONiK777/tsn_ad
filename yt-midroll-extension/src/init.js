@@ -79,6 +79,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       init();
     }
   }
+
+  // Додаткові команди для popup.js
+  if (request.action === 'mra_get_settings') {
+    sendResponse({ autoOpenPanel: CONFIG.autoOpenPanel });
+    return true;
+  }
+
+  if (request.action === 'mra_set_setting') {
+    if (request.key && request.value !== undefined) {
+      CONFIG[request.key] = request.value;
+      saveSettings(); // utils.js збереже у localStorage сторінки
+      sendResponse({ success: true });
+    }
+  }
 });
 
 init();

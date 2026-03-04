@@ -2,21 +2,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoOpenCb = document.getElementById('auto-open-cb');
     const forceOpenBtn = document.getElementById('force-open-btn');
 
-    // Load the current autoOpenPanel setting
-    chrome.storage.local.get('mraSettings', (result) => {
-        if (result && result.mraSettings && result.mraSettings.autoOpenPanel !== undefined) {
-            autoOpenCb.checked = result.mraSettings.autoOpenPanel;
-        } else {
-            autoOpenCb.checked = true; // default value
+    // Load the current autoOpenPanel setting from active tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0]) {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'mra_get_settings' }, (response) => {
+                if (response && response.autoOpenPanel !== undefined) {
+                    autoOpenCb.checked = response.autoOpenPanel;
+                }
+            });
         }
     });
 
-    // Save the setting when checkbox is toggled
+    // Save the setting when checkbox is toggled by sending to active tab
     autoOpenCb.addEventListener('change', () => {
-        chrome.storage.local.get('mraSettings', (result) => {
-            let data = (result && result.mraSettings) ? result.mraSettings : {};
-            data.autoOpenPanel = autoOpenCb.checked;
-            chrome.storage.local.set({ mraSettings: data });
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs && tabs[0]) {
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: 'mra_set_setting',
+                    key: 'autoOpenPanel',
+                    value: autoOpenCb.checked
+                });
+            }
         });
     });
 

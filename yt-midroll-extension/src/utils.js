@@ -167,25 +167,24 @@ function saveSettings() {
   try {
     const data = {};
     SETTINGS_KEYS.forEach(k => { data[k] = CONFIG[k]; });
-    chrome.storage.local.set({ mraSettings: data });
-  } catch (e) { /* ignore — не критично */ }
+    localStorage.setItem('mraSettings', JSON.stringify(data));
+  } catch (e) { /* ignore */ }
 }
 
 function loadSettings() {
   return new Promise(resolve => {
     try {
-      chrome.storage.local.get('mraSettings', result => {
-        if (result && result.mraSettings) {
-          const s = result.mraSettings;
-          SETTINGS_KEYS.forEach(k => {
-            if (s[k] !== undefined) CONFIG[k] = s[k];
-          });
-          log('Налаштування завантажено з попередньої сесії', 'info');
-        }
-        resolve();
-      });
+      const raw = localStorage.getItem('mraSettings');
+      if (raw) {
+        const s = JSON.parse(raw);
+        SETTINGS_KEYS.forEach(k => {
+          if (s[k] !== undefined) CONFIG[k] = s[k];
+        });
+        log('Налаштування завантажено з попередньої сесії', 'info');
+      }
+      resolve();
     } catch (e) {
-      resolve(); // Якщо storage недоступний — просто продовжуємо
+      resolve();
     }
   });
 }
