@@ -315,14 +315,21 @@ async function _doAnalyze() {
 
   const maxAmp = arrayMax(smoothed);
 
-  // Перцентиль для порогу тиші
-  const percentileValue = Math.max(0.01, Math.min(0.99, CONFIG.silenceThresholdPct / 100));
-  const GLOBAL_THRESHOLD = getPercentile(smoothed, percentileValue);
+  // Пороговий рівень тиші на основі середньої амплітуди
+  // silenceThresholdPct % від середнього рівня гучності мови
+  // Якщо диктор говорить рівно, порог = X% від середніх показників → надійніше за перцентиль
+  const thresholdFromMean = avgAbs * (CONFIG.silenceThresholdPct / 100);
+  // Також беремо перцентиль як нижню границю (щоб не пропустити дуже тихі місця)
+  const thresholdFromPercentile = getPercentile(smoothed, Math.max(0.01, Math.min(0.99, CONFIG.silenceThresholdPct / 100)));
+  // Беремо ВИЩЕ з двох — щоб більше пауз знаходилось
+  const GLOBAL_THRESHOLD = Math.max(thresholdFromMean, thresholdFromPercentile);
 
-  console.group('%c🔍 АНАЛІЗ ПОРОГІВ (Перцентиль)', 'color:#ffd166;font-weight:bold');
-  console.log(`  Max амплітуда:     ${maxAmp.toFixed(4)}`);
-  console.log(`  Середня (avgAbs):  ${avgAbs.toFixed(4)}`);
-  console.log(`  Поріг тиші (${CONFIG.silenceThresholdPct} перцентиль): ${GLOBAL_THRESHOLD.toFixed(4)} амплітуди`);
+  console.group('%c🔍 АНАЛІЗ ПОРОГІВ', 'color:#ffd166;font-weight:bold');
+  console.log(`  Max амплітуда:       ${maxAmp.toFixed(4)}`);
+  console.log(`  Середня (avgAbs):    ${avgAbs.toFixed(4)}`);
+  console.log(`  Поріг (mean-based):  ${thresholdFromMean.toFixed(4)}`);
+  console.log(`  Поріг (перцентиль):  ${thresholdFromPercentile.toFixed(4)}`);
+  console.log(`  АКТИВНИЙ поріг:      ${GLOBAL_THRESHOLD.toFixed(4)} (вищий з двох)`);
   console.groupEnd();
 
   // Знаходимо ВІДРІЗКИ ТИШІ
@@ -378,7 +385,8 @@ async function _doAnalyze() {
     }
   }
 
-  log(`Знайдено ${rawSilences.length} справжніх пауз довжиною ≥ ${minS}с (поріг ${CONFIG.silenceThresholdPct}%)`, rawSilences.length > 0 ? 'success' : 'warn');
+  log(`Знайдено ${rawSilences.length} пауз ≥${minS}с (пор. ${CONFIG.silenceThresholdPct}%, з них буде відібрано найкращі)`, rawSilences.length > 0 ? 'success' : 'warn');
+  updateStatus(`🔍 Знайдено ${rawSilences.length} пауз. Відбираємо оптимальні...`, 'info');
 
   // Візуалізація знайдених пауз на тімлайні (консоль)
   if (rawSilences.length > 0) {
