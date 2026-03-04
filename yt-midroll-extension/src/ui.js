@@ -403,6 +403,14 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
+    // 1. Знімаємо галочку "Автоматичні рекламні місця", інакше YouTube не дасть видалити свої мітки
+    const autoAdsCheckbox = document.querySelector('div[role="checkbox"][aria-label="Автоматичні рекламні місця"]');
+    if (autoAdsCheckbox && autoAdsCheckbox.getAttribute('aria-checked') === 'true') {
+      log('⚙️ Вимикаємо "Автоматичні рекламні місця" від YouTube...', 'info');
+      autoAdsCheckbox.click();
+      await sleep(400); // Даємо час React застосувати зміни
+    }
+
     const deleteBtns = getAdBreakDeleteButtons();
 
     if (deleteBtns.length === 0) {
