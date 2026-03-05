@@ -2,10 +2,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoOpenCb = document.getElementById('auto-open-cb');
     const forceOpenBtn = document.getElementById('force-open-btn');
 
+    // Set version from manifest automatically
+    const versionEl = document.getElementById('extension-version');
+    if (versionEl) {
+        versionEl.textContent = 'v' + chrome.runtime.getManifest().version;
+    }
+
     // Load the current autoOpenPanel setting from active tab
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs && tabs[0]) {
             chrome.tabs.sendMessage(tabs[0].id, { action: 'mra_get_settings' }, (response) => {
+                if (chrome.runtime.lastError) {
+                    return; // Ignore error when content script is not loaded
+                }
                 if (response && response.autoOpenPanel !== undefined) {
                     autoOpenCb.checked = response.autoOpenPanel;
                 }
@@ -21,6 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     action: 'mra_set_setting',
                     key: 'autoOpenPanel',
                     value: autoOpenCb.checked
+                }, (response) => {
+                    if (chrome.runtime.lastError) return;
                 });
             }
         });

@@ -129,8 +129,12 @@ function renderSelectedList() {
     timeSpan.textContent = s.timecode;
 
     const durSpan = document.createElement('span');
-    durSpan.style.cssText = 'color:#666;font-size:11px;';
-    durSpan.textContent = `(${s.duration_sec}с)`;
+    durSpan.style.cssText = 'color:#888;font-size:11px;';
+    if (s.duration_sec > 0) {
+      durSpan.textContent = `(пауза ${s.duration_sec}с)`;
+    } else {
+      durSpan.textContent = ''; // Hide if 0 (e.g., manual marker without pause)
+    }
 
     item.appendChild(numSpan);
     item.appendChild(timeSpan);

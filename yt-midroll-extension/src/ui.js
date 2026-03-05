@@ -160,7 +160,7 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
   <button id="mra-analyze">🔴 Аналізувати паузи</button>
 
   <div class="ms" id="mra-waveform-section" style="display:none;">
-    <div class="mst">🌊 Вейвформа<br><span style="color:#888;text-transform:none;font-size:9.5px;font-weight:400;margin-top:2px;display:block;">(те, що бачить ваш віртуальний колега ВАЛЕРА)</span></div>
+    <div class="mst">🕵🏻 Вейвформа<br><span style="color:#888;text-transform:none;font-size:9.5px;font-weight:400;margin-top:2px;display:block;">(те, що бачить ваш віртуальний колега ВАЛЕРА)</span></div>
     <canvas id="mra-waveform" width="282" height="80" style="width:100%;border:1px solid #333;border-radius:6px;cursor:crosshair;background:#1a1a1a;" title="Клік = додати/видалити мітку"></canvas>
     <div style="color:#666;font-size:9px;margin-top:3px;">
       <span style="color:#e60000;">━</span> = авто-паузи |

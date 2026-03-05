@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <title>ТСН АвтоРеклама</title>
@@ -13,6 +14,7 @@
       font-family: 'Roboto', 'Segoe UI', sans-serif;
       font-size: 13px;
     }
+
     h2 {
       margin: 0 0 16px 0;
       font-size: 15px;
@@ -21,6 +23,7 @@
       align-items: center;
       letter-spacing: 0.5px;
     }
+
     .badge {
       background: #c91c1c;
       color: #ffffff;
@@ -30,6 +33,7 @@
       font-size: 12px;
       font-weight: 900;
     }
+
     .option {
       display: flex;
       align-items: center;
@@ -39,6 +43,7 @@
       border-radius: 6px;
       border: 1px solid #333333;
     }
+
     .option label {
       display: flex;
       align-items: center;
@@ -47,9 +52,11 @@
       font-weight: 500;
       color: #cccccc;
     }
+
     .option label:hover {
       color: #ffffff;
     }
+
     .option input {
       margin-right: 10px;
       accent-color: #c91c1c;
@@ -57,6 +64,7 @@
       height: 16px;
       cursor: pointer;
     }
+
     .btn {
       width: 100%;
       padding: 10px;
@@ -70,9 +78,11 @@
       margin-top: 12px;
       transition: background 0.2s;
     }
+
     .btn:hover {
       background: #e62020;
     }
+
     .footer {
       margin-top: 16px;
       text-align: center;
@@ -81,9 +91,10 @@
     }
   </style>
 </head>
+
 <body>
   <h2><span class="badge">ТСН</span> АВТОРЕКЛАМА</h2>
-  
+
   <div class="option">
     <label title="Якщо вимкнено, панель не буде вилітати автоматично при відкритті редактора">
       <input type="checkbox" id="auto-open-cb">
@@ -93,8 +104,9 @@
 
   <button class="btn" id="force-open-btn">⚡ Відкрити на сторінці</button>
 
-  <div class="footer">v1.1.5</div>
-  
+  <div class="footer" id="extension-version"></div>
+
   <script src="popup.js"></script>
 </body>
+
 </html>
