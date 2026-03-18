@@ -1,4 +1,7 @@
 // ─── РЕНДЕР ──────────────────────────────────────────────────────────────────
+var offscreenCanvas = null;
+var lastRenderSignature = null;
+var lastStatsAdCount = null;
 
 function showStopButton(show) {
   const insertBtn = document.getElementById('mra-insert');
@@ -6,15 +9,15 @@ function showStopButton(show) {
 
   if (show) {
     if (insertBtn) insertBtn.style.display = 'none';
-    if (!stopBtn) {
+    if (!stopBtn && insertBtn && insertBtn.parentNode) {
       stopBtn = document.createElement('button');
       stopBtn.id = 'mra-stop';
       stopBtn.textContent = '⛔ ЗУПИНИТИ';
       stopBtn.style.cssText = 'width:100%;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:0.5px;transition:all .2s;margin-bottom:6px;background:#ff6b6b;color:#fff;';
       stopBtn.addEventListener('click', () => { state.insertAbort = true; });
-      if (insertBtn) insertBtn.parentNode.insertBefore(stopBtn, insertBtn.nextSibling);
+      insertBtn.parentNode.insertBefore(stopBtn, insertBtn.nextSibling);
     }
-    stopBtn.style.display = '';
+    if (stopBtn) stopBtn.style.display = '';
   } else {
     if (stopBtn) stopBtn.style.display = 'none';
     if (insertBtn) insertBtn.style.display = '';
@@ -165,9 +168,6 @@ function renderSelectedList() {
 }
 
 // ─── ВІЗУАЛІЗАЦІЯ ВЕЙВФОРМИ ───────────────────────────────────────────────────
-var offscreenCanvas = null;
-var lastRenderSignature = null;
-var lastStatsAdCount = null;
 
 function renderWaveform() {
   const canvas = document.getElementById('mra-waveform');

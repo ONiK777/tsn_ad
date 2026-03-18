@@ -38,7 +38,7 @@ function init() {
         const btn = document.getElementById('mra-reopen-btn');
         if (btn) btn.remove();
       }
-    }, 200);
+    }, 400);
   });
 
   activeObservers.push(observer);
@@ -87,7 +87,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'mra_set_setting') {
-    if (request.key && request.value !== undefined) {
+    if (request.key && SETTINGS_KEYS.includes(request.key) && request.value !== undefined) {
       CONFIG[request.key] = request.value;
       saveSettings(); // utils.js збереже у localStorage сторінки
       sendResponse({ success: true });

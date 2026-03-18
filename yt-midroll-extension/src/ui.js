@@ -287,22 +287,24 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
 
     // Введення через Prompt
     valEl.style.cursor = 'pointer';
-    valEl.addEventListener('click', () => {
+    const onValClick = () => {
       const currentVal = valEl.value;
       const newValStr = prompt(`Введіть нове значення (мінімум: ${minVal}, максимум: ${maxVal}):`, currentVal);
       if (newValStr !== null && newValStr.trim() !== '') {
         updateVal(newValStr.replace(',', '.'));
       }
-    });
+    };
+    addTrackedEventListener(valEl, 'click', onValClick);
 
     // ── Скрол коліщатком ──
-    stp.addEventListener('wheel', (e) => {
+    const onWheel = (e) => {
       e.preventDefault();
       e.stopPropagation();
       const cur = parseFloat(valEl.value) || parseFloat(stp.dataset.val);
       if (e.deltaY < 0) updateVal(cur + step);
       else updateVal(cur - step);
-    }, { passive: false });
+    };
+    addTrackedEventListener(stp, 'wheel', onWheel, { passive: false });
   });
 
   // ── Тогл авто-gap ──
@@ -353,58 +355,62 @@ input:checked+.msl:before{transform:translateX(14px);background:#fff}
         return;
       }
 
-      // Магніт: примагнітити до найближчої паузи (якщо ближче 2.5с)
-      let finalSec = clickSec;
-      let closestRaw = null;
-      let minDist = 2.5;
-      state.silences.forEach(s => {
-        const dist = Math.abs(s.seconds - clickSec);
-        if (dist < minDist) { minDist = dist; closestRaw = s; }
-      });
-
-      if (closestRaw) {
-        finalSec = closestRaw.seconds;
-      }
-
-      // Показуємо prompt з попередньо заповненим таймкодом
-      const defaultTimecode = toTimecode(finalSec);
-      const userInput = prompt('Введіть таймкод для мітки (ММ:СС:КК або ММ:СС):', defaultTimecode);
-
-      if (userInput === null || userInput.trim() === '') return; // Скасовано
-
-      // Парсимо введений таймкод
-      const parsed = parseTimecodeInput(userInput.trim());
-      if (parsed === null) {
-        log(`Некоректний таймкод: "${userInput}"`, 'error');
-        updateStatus('❌ Некоректний формат таймкоду', 'error');
+      // Шукаємо найближчу реальну паузу в радіусі 15 секунд
+      // Якщо пауза не знайдена — НЕ дозволяємо ставити мітку (YouTube все одно відхилить)
+      if (!state.silences || state.silences.length === 0) {
+        log('❌ Не можна поставити мітку: спочатку виконайте аналіз (немає даних про паузи)', 'error');
+        showHud('❌ Спочатку натисніть "Аналізувати"', 'error');
         return;
       }
 
+      let closestSilence = state.silences[0];
+      let minDist = Math.abs(closestSilence.seconds - clickSec);
+
+      state.silences.forEach(s => {
+        const dist = Math.abs(s.seconds - clickSec);
+        if (dist < minDist) {
+          minDist = dist;
+          closestSilence = s;
+        }
+      });
+
+      // Немає паузи в радіусі 15с — відхиляємо
+      if (minDist > 15) {
+        log(`❌ Немає паузи поруч (${toTimecode(clickSec)}). YouTube не дозволить рекламу без реальної паузи тиші.`, 'error');
+        showHud(`❌ Немає паузи в ±15с
+YouTube відхилить рекламу без тиші`, 'error');
+        return;
+      }
+
+      const finalSec = closestSilence.seconds;
+
       // Перевіряємо чи мітка в межах відео
-      if (parsed < 0 || parsed >= state.waveformData.duration) {
-        log(`Таймкод за межами відео: ${userInput}`, 'error');
+      if (finalSec < 0 || finalSec >= state.waveformData.duration) {
+        log(`Таймкод за межами відео: ${toTimecode(finalSec)}`, 'error');
         updateStatus('❌ Таймкод за межами відео', 'error');
         return;
       }
 
-      if (closestRaw && Math.abs(parsed - finalSec) < 0.1) {
-        log('🧲 Примагнітився до реальної паузи!', 'info');
-      }
-
       state.selected.push({
-        timecode: toTimecode(parsed),
-        seconds: +parsed.toFixed(2),
-        duration_sec: closestRaw && Math.abs(parsed - closestRaw.seconds) < 3 ? closestRaw.duration_sec : 0,
-        amplitude: closestRaw && Math.abs(parsed - closestRaw.seconds) < 3 ? closestRaw.amplitude : 0,
+        timecode: toTimecode(finalSec),
+        seconds: +finalSec.toFixed(2),
+        duration_sec: closestSilence.duration_sec,
+        amplitude: closestSilence.amplitude,
         manual: true
       });
       state.selected.sort((a, b) => a.seconds - b.seconds);
-      log(`Додано вручну мітку на ${toTimecode(parsed)}`, 'success');
+
+      const distStr = minDist < 0.5 ? 'точно' : `±${minDist.toFixed(1)}с`;
+      const msg = `🧲 Мітка: ${toTimecode(finalSec)}\n${distStr} від кліку · пауза ${closestSilence.duration_sec?.toFixed(1) || '?'}с`;
+      log(msg.replace('\n', ' '), 'success');
+      showHud(msg, 'success');
+      updateStatus(`✅ Мітка на ${toTimecode(finalSec)}`, 'success');
 
       renderSelectedList();
       renderWaveform();
     });
   }
+
 
   // ── Вставити ──
   document.getElementById('mra-insert').addEventListener('click', insertTimecodes);

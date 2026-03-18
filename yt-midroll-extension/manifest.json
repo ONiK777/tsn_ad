@@ -1,19 +1,26 @@
 {
   "manifest_version": 3,
-  "name": "ТСН АвтоРеклама (beta)",
-  "version": "2.0.1",
-  "description": "Автоматична розстановка рекламних пауз у YouTube Studio",
+  "name": "ТСН Мененджер (beta)",
+  "version": "2.7.0",
+  "description": "Автоматично ставить рекламу в паузах та запускає ефіри за вашим розкладом.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": [],
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "windows",
+    "notifications",
+    "scripting"
+  ],
   "host_permissions": [
     "https://studio.youtube.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background.js"
   },
   "content_scripts": [
     {
@@ -27,7 +34,8 @@
         "src/render.js",
         "src/injector.js",
         "src/ui.js",
-        "src/init.js"
+        "src/init.js",
+        "src/scheduler.js"
       ],
       "run_at": "document_start"
     }
@@ -43,7 +51,7 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "TSN ad control"
+    "default_popup": "src/popup.html",
+    "default_title": "TSN manager"
   }
 }

@@ -14,7 +14,7 @@ function isValidUrl(url) {
     if (parsedUrl.protocol !== 'https:') return false;
     const host = parsedUrl.hostname;
     return host.includes('youtube.com') || host.includes('googlevideo.com') ||
-           host.includes('ytimg.com') || host.includes('ggpht.com') || host.includes('googleusercontent.com');
+      host.includes('ytimg.com') || host.includes('ggpht.com') || host.includes('googleusercontent.com');
   } catch {
     return false;
   }
@@ -93,14 +93,22 @@ function findConfirmButton() {
   // Шукаємо тільки у ВИДИМИХ діалогах (не в прихованих/закритих)
   const dialogs = document.querySelectorAll('ytcp-dialog, .ytcp-dialog');
   for (const dialog of dialogs) {
-    if (dialog.hasAttribute('hidden') || dialog.style.display === 'none' || !dialog.offsetParent) continue;
+    if (dialog.hasAttribute('hidden') || dialog.style.display === 'none' || dialog.getBoundingClientRect().width === 0) continue;
     for (const btn of dialog.querySelectorAll('button')) {
-      if (!btn.offsetParent) continue; // Пропускаємо невидимі кнопки
+      if (btn.getBoundingClientRect().width === 0) continue; // Пропускаємо невидимі кнопки
       const t = btn.textContent?.toLowerCase() || '';
       if (['ok', 'confirm', 'підтвердити'].some(v => t.includes(v))) return btn;
     }
   }
   return null;
+}
+
+// Кешована тривалість відео (оновлюється при аналізі через updateCachedVideoDuration)
+var _cachedVideoDuration = 0;
+
+function updateCachedVideoDuration() {
+  const video = document.querySelector('video');
+  _cachedVideoDuration = video && isFinite(video.duration) ? video.duration : 0;
 }
 
 function toTimecode(seconds) {
@@ -110,41 +118,15 @@ function toTimecode(seconds) {
   const min = Math.floor(seconds / 60) % 60;
   const h = Math.floor(seconds / 3600);
 
-  if (h > 0) {
-    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
+  const totalH = Math.floor(_cachedVideoDuration / 3600);
+
+  if (h > 0 || totalH > 0) {
+    return `${h}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
   }
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
 }
 
-// Парсинг таймкоду з рядка у секунди
-// Підтримує формати: MM:SS:FF, MM:SS, HH:MM:SS:FF, HH:MM:SS, SS
-function parseTimecodeInput(input) {
-  if (!input || typeof input !== 'string') return null;
 
-  const parts = input.split(':').map(p => parseFloat(p.trim()));
-  if (parts.some(p => isNaN(p) || p < 0)) return null;
-
-  let seconds = 0;
-
-  if (parts.length === 1) {
-    // SS
-    seconds = parts[0];
-  } else if (parts.length === 2) {
-    // MM:SS
-    seconds = parts[0] * 60 + parts[1];
-  } else if (parts.length === 3) {
-    // MM:SS:FF (кадри 25fps)
-    seconds = parts[0] * 60 + parts[1] + parts[2] / 25;
-  } else if (parts.length === 4) {
-    // HH:MM:SS:FF
-    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2] + parts[3] / 25;
-  } else {
-    return null;
-  }
-
-  if (!isFinite(seconds) || seconds < 0) return null;
-  return seconds;
-}
 
 function updateStatus(msg, type = 'info') {
   const el = document.getElementById('mra-status');
@@ -153,6 +135,57 @@ function updateStatus(msg, type = 'info') {
   el.style.color = c[type] || c.info;
   el.textContent = msg;
 }
+
+// ── HUD-сповіщення (плаваючий оверлей у стилі scheduler) ──
+function showHud(text, type = 'info', durationMs = 3000) {
+  const c = { info: '#4cc9f0', success: '#06d6a0', error: '#ff6b6b', warn: '#ffd166' }[type] || '#4cc9f0';
+
+  // Видаляємо попередній HUD
+  document.getElementById('mra-hud-toast')?.remove();
+
+  const el = document.createElement('div');
+  el.id = 'mra-hud-toast';
+  el.textContent = text;
+  el.style.cssText = `
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    background: rgba(17,17,17,0.95);
+    color: ${c};
+    border: 2px solid ${c};
+    border-radius: 10px;
+    padding: 12px 22px;
+    font-family: 'Roboto', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    z-index: 2147483647;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+    pointer-events: none;
+    white-space: pre-wrap;
+    max-width: 480px;
+    text-align: center;
+    transition: opacity 0.4s ease, transform 0.3s ease;
+    opacity: 0;
+  `;
+  document.body.appendChild(el);
+
+  // Анімація появи
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateX(-50%) translateY(0)';
+    });
+  });
+
+  // Автозакриття
+  setTimeout(() => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(-50%) translateY(10px)';
+    setTimeout(() => el.remove(), 400);
+  }, durationMs);
+}
+
 
 function updateProgress(cur, total) {
   const bar = document.getElementById('mra-progress-bar');

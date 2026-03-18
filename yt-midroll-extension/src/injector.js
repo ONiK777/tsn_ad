@@ -15,7 +15,7 @@ if (document.head || document.documentElement) {
   earlyObs.observe(document, { childList: true, subtree: true });
 }
 
-window.addEventListener('message', function (event) {
+function _onWaveformMessage(event) {
   try {
     if (event.source !== window || !event.data || event.data.type !== 'MRA_WAVEFORM_URL') return;
 
@@ -45,4 +45,7 @@ window.addEventListener('message', function (event) {
   } catch (error) {
     log('Помилка обробки повідомлення: ' + error.message, 'error');
   }
-});
+}
+// НЕ через addTrackedEventListener — цей listener має жити ЗАВЖДИ,
+// бо cleanup() викликається з init() і видалить його до того, як прийде waveform URL
+window.addEventListener('message', _onWaveformMessage);

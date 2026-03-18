@@ -61,5 +61,11 @@ function cleanup() {
     domCacheWithTTL.clear();
   }
 
+  // Очищаємо offscreen canvas
+  if (typeof offscreenCanvas !== 'undefined') {
+    offscreenCanvas = null;
+    lastRenderSignature = null;
+  }
+
   log('♻️ Cleanup виконано', 'info');
 }

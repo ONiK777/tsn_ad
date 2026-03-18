@@ -178,6 +178,7 @@ async function _doAnalyze() {
   }
 
   const duration = video.duration;
+  updateCachedVideoDuration();
 
   if (!isValidNumber(duration)) {
     updateStatus('❌ Некоректна тривалість відео (NaN/Infinity/0)', 'error');
@@ -552,117 +553,120 @@ async function insertTimecodes() {
 
   state.inserting = true;
   state.insertAbort = false;
-  updateStatus(`⏳ Вставляємо ${pendingSilences.length} нових міток...`, 'info');
-  updateProgress(0, pendingSilences.length);
-  showStopButton(true);
 
   let ok = 0, fail = 0;
 
-  for (let idx = 0; idx < pendingSilences.length; idx++) {
-    if (state.insertAbort) {
-      log(`⛔ Вставку зупинено користувачем після ${ok} міток`, 'warn');
-      break;
-    }
-    const s = pendingSilences[idx];
-    log(`[${idx + 1}/${pendingSilences.length}] Вставка: ${s.timecode}`, 'info');
+  try {
+    updateStatus(`⏳ Вставляємо ${pendingSilences.length} нових міток...`, 'info');
+    updateProgress(0, pendingSilences.length);
+    showStopButton(true);
 
-    try {
-      // 1. Запам'ятовуємо кількість міток ДО
-      const deleteBtnsBefore = getAdBreakDeleteButtons();
-
-      // 2. ІМІТАЦІЯ ЛЮДИНИ: Вводимо час в ГОЛОВНИЙ інпут плеєра (перемотуємо відео)
-      const timeInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, ytcp-media-timestamp-input input'));
-      const mainInput = timeInputs.find(inp => inp.offsetParent !== null); // Беремо перше видиме поле (це завжди таймкод під відео)
-
-      // Одночасно страхуємось через HTML5 API
-      const videoEl = document.querySelector('video');
-      if (videoEl) {
-        videoEl.currentTime = s.seconds;
-        videoEl.dispatchEvent(new Event('timeupdate', { bubbles: true }));
-        videoEl.dispatchEvent(new Event('seeked', { bubbles: true }));
+    for (let idx = 0; idx < pendingSilences.length; idx++) {
+      if (state.insertAbort) {
+        log(`⛔ Вставку зупинено користувачем після ${ok} міток`, 'warn');
+        break;
       }
+      const s = pendingSilences[idx];
+      log(`[${idx + 1}/${pendingSilences.length}] Вставка: ${s.timecode}`, 'info');
 
-      if (mainInput) {
-        mainInput.focus();
-        await sleep(100);
-        mainInput.select();
-        await sleep(100);
+      try {
+        // 1. Запам'ятовуємо кількість міток ДО
+        const deleteBtnsBefore = getAdBreakDeleteButtons();
 
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        try {
-          document.execCommand('selectAll', false, null);
-          document.execCommand('insertText', false, s.timecode);
-        } catch (e) {
-          nativeSetter.call(mainInput, s.timecode);
-          mainInput.dispatchEvent(new Event('input', { bubbles: true }));
+        // 2. ІМІТАЦІЯ ЛЮДИНИ: Вводимо час в ГОЛОВНИЙ інпут плеєра (перемотуємо відео)
+        const timeInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, ytcp-media-timestamp-input input'));
+        const mainInput = timeInputs.find(inp => inp.offsetParent !== null); // Беремо перше видиме поле (це завжди таймкод під відео)
+
+        // Одночасно страхуємось через HTML5 API
+        const videoEl = document.querySelector('video');
+        if (videoEl) {
+          videoEl.currentTime = s.seconds;
+          videoEl.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+          videoEl.dispatchEvent(new Event('seeked', { bubbles: true }));
         }
 
-        mainInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-        await sleep(800); // Чекаємо поки відео гарантовано відмотається
-      } else {
-        await sleep(600); // Якщо поле не знайшли — чекаємо після HTML5 перемотки
-      }
+        if (mainInput) {
+          mainInput.focus();
+          await sleep(100);
+          mainInput.select();
+          await sleep(100);
 
-      // 3. Тиснемо кнопку "Вставити рекламне місце"
-      // Мітка тепер гарантовано впаде туди, де стоїть повзунок!
-      const btn = findInsertAdBreakButton();
-      if (!btn) throw new Error('Кнопка вставки не знайдена');
-      btn.click();
-
-      await sleep(600); // Чекаємо поки YouTube збереже мітку в свій список
-
-      // Підтвердження діалогу (якщо раптом вилізе)
-      const confirmBtn = findConfirmButton();
-      if (confirmBtn) { confirmBtn.click(); await sleep(300); }
-
-      await sleep(500);
-
-      // 6. ВИДАЛЕННЯ ДУБЛІКАТІВ: порівнюємо КІЛЬКІСТЬ trash-кнопок до і після
-      // Порівнюємо за count, а не за reference — бо YouTube може перемалювати DOM
-      const deleteBtnsAfter = getAdBreakDeleteButtons();
-      const created = deleteBtnsAfter.length - deleteBtnsBefore.length;
-
-      if (created > 1) {
-        log(`⚠️ YouTube створив ${created} записів замість 1, видаляємо ${created - 1} зайвих...`, 'warn');
-        // Видаляємо зайві з кінця списку (останні додані — останні в DOM)
-        for (let d = 0; d < created - 1; d++) {
-          const currentBtns = getAdBreakDeleteButtons();
-          if (currentBtns.length > 0) {
-            currentBtns[currentBtns.length - 1].click();
-            await sleep(300);
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          try {
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, s.timecode);
+          } catch (e) {
+            nativeSetter.call(mainInput, s.timecode);
+            mainInput.dispatchEvent(new Event('input', { bubbles: true }));
           }
+
+          mainInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+          await sleep(800); // Чекаємо поки відео гарантовано відмотається
+        } else {
+          await sleep(600); // Якщо поле не знайшли — чекаємо після HTML5 перемотки
         }
-        await sleep(300);
+
+        // 3. Тиснемо кнопку "Вставити рекламне місце"
+        // Мітка тепер гарантовано впаде туди, де стоїть повзунок!
+        const btn = findInsertAdBreakButton();
+        if (!btn) throw new Error('Кнопка вставки не знайдена');
+        btn.click();
+
+        await sleep(600); // Чекаємо поки YouTube збереже мітку в свій список
+
+        // Підтвердження діалогу (якщо раптом вилізе)
+        const confirmBtn = findConfirmButton();
+        if (confirmBtn) { confirmBtn.click(); await sleep(300); }
+
+        await sleep(500);
+
+        // 6. ВИДАЛЕННЯ ДУБЛІКАТІВ: порівнюємо КІЛЬКІСТЬ trash-кнопок до і після
+        // Порівнюємо за count, а не за reference — бо YouTube може перемалювати DOM
+        const deleteBtnsAfter = getAdBreakDeleteButtons();
+        const created = deleteBtnsAfter.length - deleteBtnsBefore.length;
+
+        if (created > 1) {
+          log(`⚠️ YouTube створив ${created} записів замість 1, видаляємо ${created - 1} зайвих...`, 'warn');
+          // Видаляємо зайві з кінця списку (останні додані — останні в DOM)
+          for (let d = 0; d < created - 1; d++) {
+            const currentBtns = getAdBreakDeleteButtons();
+            if (currentBtns.length > 0) {
+              currentBtns[currentBtns.length - 1].click();
+              await sleep(300);
+            }
+          }
+          await sleep(300);
+        }
+
+        s.inserted = true; // Позначаємо мітку як УСПІШНО вставлену
+        renderSelectedList(); // Оновлюємо список щоб одразу показати що мітка вставлена
+
+        ok++;
+        updateProgress(ok, pendingSilences.length);
+        log(`✅ ${s.timecode} вставлено`, 'success');
+        await sleep(800);
+      } catch (e) {
+        fail++;
+        log(`❌ ${s.timecode}: ${e.message}`, 'error');
+        const closeBtn = document.querySelector('ytcp-dialog [aria-label*="close"], ytcp-dialog .close-button');
+        if (closeBtn) { closeBtn.click(); await sleep(500); }
       }
-
-      s.inserted = true; // Позначаємо мітку як УСПІШНО вставлену
-      renderSelectedList(); // Оновлюємо список щоб одразу показати що мітка вставлена
-
-      ok++;
-      updateProgress(ok, pendingSilences.length);
-      log(`✅ ${s.timecode} вставлено`, 'success');
-      await sleep(800);
-    } catch (e) {
-      fail++;
-      log(`❌ ${s.timecode}: ${e.message}`, 'error');
-      const closeBtn = document.querySelector('ytcp-dialog [aria-label*="close"], ytcp-dialog .close-button');
-      if (closeBtn) { closeBtn.click(); await sleep(500); }
     }
+  } finally {
+    showStopButton(false);
+    state.inserting = false;
+
+    const aborted = state.insertAbort;
+    state.insertAbort = false;
+
+    if (aborted) {
+      updateStatus(`⛔ Зупинено! Вставлено ${ok} з ${pendingSilences.length}`, 'warn');
+    } else {
+      updateStatus(
+        fail === 0 ? `🏁 Готово! ${ok} нових міток вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
+        fail === 0 ? 'success' : 'warn'
+      );
+    }
+    updateProgress(ok, pendingSilences.length);
   }
-
-  showStopButton(false);
-  state.inserting = false;
-
-  const aborted = state.insertAbort;
-  state.insertAbort = false;
-
-  if (aborted) {
-    updateStatus(`⛔ Зупинено! Вставлено ${ok} з ${pendingSilences.length}`, 'warn');
-  } else {
-    updateStatus(
-      fail === 0 ? `🏁 Готово! ${ok} нових міток вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
-      fail === 0 ? 'success' : 'warn'
-    );
-  }
-  updateProgress(ok, pendingSilences.length);
 }
