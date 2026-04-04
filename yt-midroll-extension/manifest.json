@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ТСН Мененджер (beta)",
-  "version": "2.7.0",
+  "version": "2.9.9",
   "description": "Автоматично ставить рекламу в паузах та запускає ефіри за вашим розкладом.",
   "icons": {
     "16": "icons/icon16.png",

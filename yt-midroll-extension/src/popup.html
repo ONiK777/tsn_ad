@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>ТСН АвтоРеклама</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 300px;
+      max-height: 520px;
+      background-color: #0F0F11;
+      color: #FFFFFF;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 13px;
+      overflow-y: auto;
+      user-select: none;
+    }
+
+    ::-webkit-scrollbar { width: 0px; }
+
+    /* -- Header -- */
+    .header {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      background: #18181A;
+      border-bottom: 1px solid #27272A;
+    }
+
+    .logo {
+      background: #E52E2E;
+      color: #fff;
+      font-weight: 800;
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+      margin-right: 12px;
+    }
+
+    .header-title {
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.3px;
+    }
+
+    .header-version {
+      margin-left: auto;
+      font-size: 12px;
+      color: #71717A;
+      font-weight: 500;
+    }
+
+    /* -- Main Content -- */
+    .content {
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* -- Section -- */
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #A1A1AA;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card {
+      background: #18181A;
+      border: 1px solid #27272A;
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    /* -- Settings Row -- */
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 44px; /* Consistent height for single-line info */
+    }
+
+    .setting-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+      padding-right: 12px;
+    }
+
+    .setting-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #F4F4F5;
+      line-height: 1.2;
+    }
+
+    .setting-desc {
+      font-size: 11px;
+      color: #71717A;
+      line-height: 1.2;
+    }
+
+    /* -- Switch -- */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #3F3F46;
+      transition: .3s;
+      border-radius: 22px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+
+    input:checked + .slider {
+      background-color: #E52E2E;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
+
+    .time-picker-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 10px;
+      background: #0F0F11;
+      border-radius: 12px;
+      border: 1px solid #27272A;
+      transition: opacity 0.3s;
+    }
+
+    .time-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Action Type Selector styles */
+    .action-type-container {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .action-type-option {
+      flex: 1;
+      text-align: center;
+      padding: 12px 4px; /* Matching btn padding */
+      cursor: pointer;
+      font-size: 14px;   /* Matching btn font size */
+      font-weight: 700;
+      color: #71717A;
+      background: #1C1C1E;
+      border: 1px solid #27272A;
+      border-radius: 10px; /* Matching btn radius */
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.2;
+      min-height: 48px;  /* Matching btn min-height */
+    }
+
+    .action-type-option:hover {
+      background: #27272A;
+      color: #D4D4D8;
+      border-color: #3F3F46;
+    }
+
+    .action-type-option.active {
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .action-type-option.active#type-launch {
+      background: #10B981;
+      border-color: #10B981;
+    }
+
+    .action-type-option.active#type-end {
+      background: #E52E2E;
+      border-color: #E52E2E;
+    }
+
+    .time-col span {
+      font-size: 11px;
+      color: #71717A;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .time-input-box {
+      width: 48px;
+      height: 48px;
+      background: #18181A;
+      border: 2px solid #3F3F46;
+      border-radius: 10px;
+      color: #FFF;
+      font-size: 26px;
+      font-weight: 800;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+
+    .time-input-box::-webkit-outer-spin-button,
+    .time-input-box::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .time-input-box:focus {
+      border-color: #E52E2E;
+      box-shadow: 0 0 0 3px rgba(229, 46, 46, 0.2);
+    }
+
+    .time-sep {
+      font-size: 26px;
+      font-weight: 800;
+      color: #52525B;
+      margin-top: 14px;
+      animation: blink 2s infinite;
+    }
+
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+    /* -- Status & Hint -- */
+    .hint-box {
+      background: rgba(63, 63, 70, 0.2);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 11px;
+      color: #A1A1AA;
+      line-height: 1.3;
+      margin-bottom: 8px;
+      border-left: 3px solid #52525B;
+    }
+
+    .status-area {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #52525B;
+    }
+
+    .status-dot.active {
+      background: #10B981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+    }
+
+    .status-text { color: #A1A1AA; }
+    .status-text.active { color: #10B981; }
+
+    .countdown-text {
+      font-size: 13px;
+      color: #D4D4D8;
+      margin-left: 18px;
+    }
+
+    .countdown-text b { color: #FBBF24; font-weight: 700; }
+
+    /* -- Buttons -- */
+    .btn {
+      width: 100%;
+      padding: 12px;
+      min-height: 48px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      border: none;
+      outline: none;
+    }
+
+    .btn-primary {
+      background: #E52E2E;
+      color: #FFF;
+      box-shadow: 0 4px 12px rgba(229, 46, 46, 0.3);
+    }
+    .btn-primary:hover {
+      background: #DC2626;
+      transform: translateY(-1px);
+    }
+    .btn-primary:active {
+      transform: translateY(1px);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: #F4F4F5;
+      border: 1px solid #3F3F46;
+    }
+    .btn-secondary:hover {
+      background: #27272A;
+      border-color: #52525B;
+    }
+
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">ТСН</div>
+    <div class="header-title" id="ext-title"></div>
+    <div class="header-version" id="ext-version"></div>
+  </div>
+
+  <div class="content">
+    
+    <!-- Settings -->
+    <div>
+      <div class="section-title">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        Налаштування
+      </div>
+      <div class="card">
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Авто-відкриття панелі</span>
+            <span class="setting-desc">У редакторі відео</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="auto-open-cb" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <hr style="border:none;border-top:1px solid #27272A;margin:10px 0;">
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Спочатку завершити</span>
+            <span class="setting-desc">При зміні ефіру: END → GO LIVE (обхід ліміту ключів)</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="end-first-cb" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scheduler -->
+    <div>
+      <div class="section-title">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Запуск трансляції
+      </div>
+      <div class="card" id="scheduler-card">
+        
+        <div class="time-picker-container" id="time-picker-ui">
+          <div class="time-col">
+            <span>Години</span>
+            <input type="number" class="time-input-box" id="inp-hh" min="0" max="23" value="19" placeholder="19">
+          </div>
+          <div class="time-sep">:</div>
+          <div class="time-col">
+            <span>Хвилини</span>
+            <input type="number" class="time-input-box" id="inp-mm" min="0" max="59" value="00" placeholder="00">
+          </div>
+        </div>
+
+        <div class="action-type-container" id="action-type-ui">
+          <div class="action-type-option active" id="type-launch">Почати трансляцію</div>
+          <div class="action-type-option" id="type-end">Завершити трансляцію</div>
+        </div>
+
+        <div class="hint-box" id="hint-box">
+          Бот автоматично <span id="hint-action" style="font-weight:bold;color:#10B981">Почне ефір</span> у відкритій вкладці Studio у вказаний час.
+          <div id="streams-count" style="margin-top:6px;color:#FBBF24;font-weight:700;"></div>
+        </div>
+
+        <div class="status-area">
+          <div class="status-header">
+            <div class="status-dot" id="status-dot"></div>
+            <div class="status-text" id="status-text">Вимкнено</div>
+          </div>
+          <div class="countdown-text" id="countdown-text"></div>
+        </div>
+
+
+
+        <button class="btn btn-primary" id="btn-schedule">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+          Запланувати
+        </button>
+        <button class="btn btn-secondary" id="btn-cancel" style="display: none;">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+          Скасувати план
+        </button>
+
+      </div>
+    </div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
