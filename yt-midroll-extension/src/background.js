@@ -877,10 +877,15 @@ function buildTgReport(report) {
     lines.push('');
     const bc = an.backupCount || 0;
     const rp = an.realPauses || 0;
-    if (bc > 0) {
-      lines.push(`📊 Для такого хронометражу YouTube радить ${idealStr} рекламних міток. Бот зміг поставити <b>${selectedCount}</b>: <b>${rp}</b> у справжніх паузах мовлення і <b>${bc}</b> запасних — у найтихіших місцях, бо реальної паузи поряд не знайшлося.`);
-    } else {
-      lines.push(`📊 Для такого хронометражу YouTube радить ${idealStr} рекламних міток. Бот зміг поставити <b>${selectedCount}</b>, і всі — у справжніх паузах мовлення. Більше придатних тихих місць у монтажі не знайшлося.`);
+    lines.push(`📊 <b>Рахунок міток:</b>`);
+    lines.push(`• Мало бути: <b>${idealStr}</b> (одна на ~2 хвилини)`);
+    lines.push(`• Бот підібрав: <b>${selectedCount}</b> — з них у природних паузах <b>${rp}</b>, запасних <b>${bc}</b>`);
+    if (typeof report.marksOnVideo === 'number' && report.marksOnVideo > 0) {
+      lines.push(`• Зараз на відео вже стоїть: <b>${report.marksOnVideo}</b> (бот їх не чіпав)`);
+    }
+    if (report.qualityAvg != null) {
+      const qWord = report.qualityAvg >= 78 ? 'люкс' : (report.qualityAvg >= 55 ? 'добра' : 'так собі');
+      lines.push(`• Середня якість природних пауз: <b>${report.qualityAvg}%</b> (${qWord})`);
     }
     if (an.escalated) {
       lines.push(`🤖 Бот навіть підняв чутливість пошуку до ${an.finalThr}% і шукав паузи вже від ${an.finalMinS} с — тихіших місць у цьому монтажі просто немає.`);
@@ -889,10 +894,19 @@ function buildTgReport(report) {
       lines.push('');
       lines.push(`<i>Куди стали мітки:</i>`);
       report.marks.forEach((m, i) => {
-        lines.push(m.backup
-          ? `${i + 1}. ${tgEscape(m.tc)} — 🛟 запасна (найтихіше місце, справжньої паузи поряд нема)`
-          : `${i + 1}. ${tgEscape(m.tc)} — ✅ природна пауза${m.quality ? ` (${tgEscape(m.quality)})` : ''}`);
+        if (m.backup) {
+          const q = m.score != null ? ` · тихіше середнього на ${m.score}%` : '';
+          lines.push(`${i + 1}. ${tgEscape(m.tc)} — 🛟 запасна (справжньої паузи поряд нема${q})`);
+        } else {
+          const dur = m.pauseSec != null ? `пауза ${m.pauseSec}с` : 'природна пауза';
+          const q = m.score != null ? ` · якість ${m.score}%` : '';
+          const lbl = m.quality ? ` (${tgEscape(m.quality)})` : '';
+          lines.push(`${i + 1}. ${tgEscape(m.tc)} — ✅ ${dur}${q}${lbl}`);
+        }
       });
+      if ((report.selectedCount || 0) > report.marks.length) {
+        lines.push(`…та ще ${report.selectedCount - report.marks.length}`);
+      }
     }
     lines.push('');
     lines.push(`ℹ️ <b>Що це означає:</b>`);

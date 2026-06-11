@@ -913,6 +913,12 @@ async function maybeSendAnalysisReport() {
 
     const videoTitle = getVideoTitle();
     console.log('[TSN ANALYZER] 📨 Надсилаю аналіз-звіт (складний монтаж/мало міток):', { videoTitle, share, selected: state.selected.length, ideal: meta.idealAds });
+    // Скільки міток ЗАРАЗ реально стоїть на відео (0 — якщо аналіз іде до вставки)
+    let marksOnVideo = 0;
+    try { marksOnVideo = getAdBreakDeleteButtons().length; } catch (e) {}
+    // Середня якість природних пауз (запасні мають іншу шкалу — не змішуємо)
+    const naturalScores = state.selected.filter(s => !s.fallbackSpot && typeof s.quality_score === 'number').map(s => s.quality_score);
+    const qualityAvg = naturalScores.length ? Math.round(naturalScores.reduce((a, b) => a + b, 0) / naturalScores.length * 100) : null;
     chrome.runtime.sendMessage({
       action: 'mra_tg_report',
       report: {
@@ -924,7 +930,15 @@ async function maybeSendAnalysisReport() {
         videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
         analysis: meta,
         selectedCount: state.selected.length,
-        marks: state.selected.slice(0, 10).map(s => ({ tc: s.timecode, backup: !!s.fallbackSpot, quality: s.quality_label || '' })),
+        marksOnVideo,
+        qualityAvg,
+        marks: state.selected.slice(0, 10).map(s => ({
+          tc: s.timecode,
+          backup: !!s.fallbackSpot,
+          quality: s.quality_label || '',
+          score: typeof s.quality_score === 'number' ? Math.round(s.quality_score * 100) : null,
+          pauseSec: (typeof s.duration_sec === 'number' && s.duration_sec > 0) ? s.duration_sec : null
+        })),
         totalPlanned: 0, ok: 0, fail: 0, events: []
       }
     }, async (res) => {
