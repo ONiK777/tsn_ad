@@ -1,5 +1,28 @@
 // ─── АНАЛІЗ АУДІО ────────────────────────────────────────────────────────────
 
+// Назва відео: document.title на сторінці редактора міток показує назву РОЗДІЛУ Studio
+// («Способи заробляти»), тому спершу пробуємо елементи з реальною назвою відео.
+function getVideoTitle() {
+  const sources = [
+    () => document.querySelector('#entity-name'),                  // верхня панель Studio на /video/*
+    () => document.querySelector('ytcp-entity-name'),
+    () => document.querySelector('ytcp-video-metadata-editor #title-textarea textarea'),
+  ];
+  for (const get of sources) {
+    try {
+      const el = get();
+      const txt = el && (el.value || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt && txt.length > 1) return txt.substring(0, 90);
+    } catch (e) {}
+  }
+  const fromDoc = document.title.replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim();
+  // Назви розділів Studio — не назва відео, відсіюємо найвідоміші
+  if (fromDoc && !/^(Способи заробляти|Монетизація|Відео|Контент|Аналітика|Редактор|Субтитри)$/i.test(fromDoc)) {
+    return fromDoc.substring(0, 90);
+  }
+  return fromDoc || 'Невідоме відео';
+}
+
 // Спроба визначити формат даних та витягти правильний масив амплітуд
 function detectAndParseSamples(buffer, duration) {
   const totalBytes = buffer.byteLength;
@@ -886,7 +909,7 @@ async function maybeSendAnalysisReport() {
       return;
     }
 
-    const videoTitle = document.title.replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim() || 'Невідоме відео';
+    const videoTitle = getVideoTitle();
     console.log('[TSN ANALYZER] 📨 Надсилаю аналіз-звіт (складний монтаж/мало міток):', { videoTitle, share, selected: state.selected.length, ideal: meta.idealAds });
     chrome.runtime.sendMessage({
       action: 'mra_tg_report',
@@ -1169,7 +1192,7 @@ async function maybeFullAutoRun() {
       // ── Telegram: КРИТИЧНО — мітки поставити нікуди (монтаж встик) ──
       try {
         if (ok) { // аналіз пройшов, але позицій нема — це «встик», а не технічний збій
-          const videoTitle = document.title.replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim() || 'Невідоме відео';
+          const videoTitle = getVideoTitle();
           const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
           console.log('[TSN ANALYZER] 📨 Sending "no_spots" Telegram report for:', videoTitle);
           chrome.runtime.sendMessage({
@@ -1381,7 +1404,7 @@ async function insertTimecodes() {
       const meta = state.analysisMeta || {};
       const tightCut = (meta.idealAds || 0) > 0 && ((meta.realPauses || 0) / meta.idealAds) < 0.3;
       if (fail > 0 || problems.length > 0 || tightCut) {
-        const videoTitle = document.title.replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim() || 'Невідоме відео';
+        const videoTitle = getVideoTitle();
         const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
         console.log('[TSN ANALYZER] 📨 Sending "insert problems" Telegram report:', { videoTitle, fail, problems: problems.length, tightCut });
         chrome.runtime.sendMessage({

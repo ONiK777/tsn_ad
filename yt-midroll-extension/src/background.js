@@ -867,26 +867,35 @@ function buildTgReport(report) {
   if (report.kind === 'analysis_warn') {
     const an = report.analysis || {};
     const selectedCount = report.selectedCount || 0;
+    const idealStr = an.idealAds ? `~${an.idealAds}` : 'кілька';
     let lines = [];
-    lines.push(`🟠 <b>ТСН Менеджер — СКЛАДНИЙ МОНТАЖ: мало природних пауз</b>`);
+    lines.push(`🟠 <b>ТСН Менеджер — складний монтаж: реклама стане не скрізь</b>`);
     lines.push('');
     lines.push(`📹 Відео: «${tgEscape(videoTitle)}»`);
     lines.push(`⏱ Хронометраж: ${durStr}`);
     if (studioUrl) lines.push(`🔗 <a href="${studioUrl}">Відкрити редактор</a>`);
     lines.push('');
-    lines.push(`📊 <b>Мітки:</b> ${selectedCount} із ~${an.idealAds || '?'} ідеальних. Природних пауз: ${an.realPauses || 0}, запасних (у «найтихіших місцях»): ${an.backupCount || 0}.`);
-    if (an.escalated) lines.push(`🤖 Бот сам підняв чутливість до ${an.finalThr}% (пауза ≥${an.finalMinS}с), але природних пауз все одно мало.`);
+    lines.push(`📊 Для такого хронометражу YouTube радить ${idealStr} рекламних міток. Бот зміг поставити <b>${selectedCount}</b>: <b>${an.realPauses || 0}</b> у справжніх паузах мовлення і <b>${an.backupCount || 0}</b> запасних — у найтихіших місцях, бо реальної паузи поряд не знайшлося.`);
+    if (an.escalated) {
+      lines.push(`🤖 Бот навіть підняв чутливість пошуку до ${an.finalThr}% і шукав паузи вже від ${an.finalMinS} с — тихіших місць у цьому монтажі просто немає.`);
+    }
     if (Array.isArray(report.marks) && report.marks.length) {
       lines.push('');
-      lines.push(`<i>Поставлені позиції:</i>`);
+      lines.push(`<i>Куди стали мітки:</i>`);
       report.marks.forEach((m, i) => {
-        lines.push(`${i + 1}. ${tgEscape(m.tc)} — ${m.backup ? '🛟 запасна' : `✅ пауза${m.quality ? ' ' + tgEscape(m.quality) : ''}`}`);
+        lines.push(m.backup
+          ? `${i + 1}. ${tgEscape(m.tc)} — 🛟 запасна (найтихіше місце, справжньої паузи поряд нема)`
+          : `${i + 1}. ${tgEscape(m.tc)} — ✅ природна пауза${m.quality ? ` (${tgEscape(m.quality)})` : ''}`);
       });
     }
     lines.push('');
-    lines.push(`⚠️ <b>Наслідок:</b> YouTube може рідше показувати рекламу в запасних мітках, а частини доходу бракуватиме через нестачу міток.`);
+    lines.push(`ℹ️ <b>Що це означає:</b>`);
+    lines.push(`✅ <b>Природна пауза</b> — справжня тиша між реченнями чи сюжетами. Реклама тут виглядає органічно: глядач її майже не помічає, і YouTube охоче її показує.`);
+    lines.push(`🛟 <b>Запасна мітка</b> — паузи поблизу не було, тож бот обрав найтихіше доступне місце. Реклама там може обірвати мову на півслові, і YouTube інколи взагалі пропускає такі місця — частина показів губиться.`);
     lines.push('');
-    lines.push(`👉 <b>Що робити:</b> відкрити редактор, прослухати запасні мітки і за можливості пересунути їх у реальні паузи; якщо міток мало — додати вручну.`);
+    lines.push(`⚠️ <b>Чим це загрожує:</b> у запасних мітках реклама крутитиметься рідше, а через нестачу міток (${selectedCount} замість ${idealStr}) відео заробить менше, ніж могло б.`);
+    lines.push('');
+    lines.push(`👉 <b>Що робити:</b> відкрийте редактор за посиланням, прослухайте місця з позначкою 🛟 і, якщо поряд є тихий момент, пересуньте мітку туди. Бракує міток — додайте вручну у паузах між сюжетами. На майбутнє: монтаж із паузою раз на ~2 хвилини дає повний набір міток автоматично.`);
     const text = lines.join('\n');
     if (text.length > 4000) return text.substring(0, 3997) + '…';
     return text;
