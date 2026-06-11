@@ -932,7 +932,8 @@ async function maybeSendAnalysisReport() {
         selectedCount: state.selected.length,
         marksOnVideo,
         qualityAvg,
-        marks: state.selected.slice(0, 25).map(s => ({
+        // У звіті показуємо лише запасні мітки — природні і так видно в рахунку
+        marks: state.selected.filter(s => s.fallbackSpot).slice(0, 25).map(s => ({
           tc: s.timecode,
           backup: !!s.fallbackSpot,
           quality: s.quality_label || '',
