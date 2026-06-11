@@ -8,6 +8,75 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
     const countdownText = document.getElementById('countdown-text');
+
+    // ── Tabs ──
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            tabBtns.forEach(b => b.classList.remove('active'));
+            tabContents.forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            const targetTab = document.getElementById('tab-' + btn.dataset.tab);
+            if (targetTab) {
+                targetTab.classList.add('active');
+            }
+        });
+    });
+
+    // ── Notification settings ──
+    const NOTIF_KEYS = [
+        'notif-stream-live', 'notif-stream-ended', 'notif-command-sent',
+        'notif-plan', 'notif-steps', 'notif-plan-done', 'notif-errors', 'notif-smart'
+    ];
+    const notifMasterCb = document.getElementById('notif-master-cb');
+    const notifList = document.getElementById('notif-list');
+
+    // Завантажити збережені налаштування
+    chrome.storage.local.get('notifSettings', (data) => {
+        const s = data.notifSettings || {};
+        // Master toggle
+        const masterOff = s._master === false;
+        notifMasterCb.checked = !masterOff;
+        if (masterOff) {
+            notifList.style.opacity = '0.35';
+            notifList.style.pointerEvents = 'none';
+        } else {
+            notifList.style.opacity = '1';
+            notifList.style.pointerEvents = 'auto';
+        }
+
+        NOTIF_KEYS.forEach(key => {
+            const cb = document.getElementById(key);
+            if (cb) cb.checked = s[key] !== false; // default: true
+        });
+    });
+
+    function saveNotifSettings() {
+        const settings = { _master: notifMasterCb.checked };
+        NOTIF_KEYS.forEach(key => {
+            const cb = document.getElementById(key);
+            if (cb) settings[key] = cb.checked;
+        });
+        chrome.storage.local.set({ notifSettings: settings });
+    }
+
+    notifMasterCb.addEventListener('change', () => {
+        if (notifMasterCb.checked) {
+            notifList.style.opacity = '1';
+            notifList.style.pointerEvents = 'auto';
+        } else {
+            notifList.style.opacity = '0.35';
+            notifList.style.pointerEvents = 'none';
+        }
+        saveNotifSettings();
+    });
+
+    NOTIF_KEYS.forEach(key => {
+        const cb = document.getElementById(key);
+        if (cb) cb.addEventListener('change', saveNotifSettings);
+    });
+
     const timePickerUI = document.getElementById('time-picker-ui');
     const actionTypeUI = document.getElementById('action-type-ui');
     const typeLaunch = document.getElementById('type-launch');
@@ -16,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentActionType = 'launch'; // 'launch' | 'end'
 
-    // Версія та Назва з маніфесту (єдине місце істини — не захардкодити в HTML!)
+    // Версія та Назва з маніфесту
     const manifest = chrome.runtime.getManifest();
     const versionEl = document.getElementById('ext-version');
     if (versionEl) {
@@ -53,21 +122,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Вибір типу дії ──
     typeLaunch.addEventListener('click', () => {
-        if (currentActionType === 'launch') return;
         currentActionType = 'launch';
         typeLaunch.classList.add('active');
         typeEnd.classList.remove('active');
-        hintAction.textContent = 'Почне ефір';
-        hintAction.style.color = '#10B981'; // Green
+        if (hintAction) {
+            hintAction.textContent = 'Почне ефір';
+            hintAction.style.color = 'var(--cyber-cyan)';
+        }
     });
 
     typeEnd.addEventListener('click', () => {
-        if (currentActionType === 'end') return;
         currentActionType = 'end';
         typeEnd.classList.add('active');
         typeLaunch.classList.remove('active');
-        hintAction.textContent = 'Завершить ефір';
-        hintAction.style.color = '#ff6b6b'; // Red
+        if (hintAction) {
+            hintAction.textContent = 'Завершить ефір';
+            hintAction.style.color = 'var(--cyber-pink)';
+        }
     });
 
     // ── Завантажуємо стан авто-відкриття панелі ──
@@ -109,7 +180,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamsCountEl = document.getElementById('streams-count');
     if (streamsCountEl) {
         chrome.tabs.query({ url: 'https://studio.youtube.com/*' }, (tabs) => {
-            // Тільки реальні трансляції (/video/*/livestreaming), не /channel/*/livestreaming
             const livestreamTabs = (tabs || []).filter(t =>
                 t.url && t.url.includes('/video/') && t.url.includes('/livestreaming')
             );
@@ -120,7 +190,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Перевіряємо стан кожної вкладки через executeScript (не залежить від content script)
+            if (!chrome.scripting) {
+                streamsCountEl.textContent = `📡 Знайдено трансляцій: ${n}`;
+                streamsCountEl.style.color = '#10B981';
+                return;
+            }
+
+            // Перевіряємо стан кожної вкладки через executeScript
             Promise.all(livestreamTabs.map(tab =>
                 new Promise(resolve => {
                     chrome.scripting.executeScript({
@@ -193,7 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </span>
                         </div>
                     `;
-                    streamsCountEl.style.color = ''; // Стилі задані всередині
+                    streamsCountEl.style.color = '';
                 } else if (liveCount === 0) {
                     streamsCountEl.textContent = `📡 Знайдено трансляцій для запуску: ${n}`;
                     streamsCountEl.style.color = '#10B981';
@@ -201,6 +277,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     streamsCountEl.innerHTML = `📡 Трансляцій: ${n} (<span style="color:#ef4444; font-weight:bold;">LIVE: ${liveCount}</span>, нових: ${notLiveCount})`;
                     streamsCountEl.style.color = '#10B981';
                 }
+            }).catch(() => {
+                streamsCountEl.textContent = `📡 Знайдено трансляцій: ${n}`;
+                streamsCountEl.style.color = '#10B981';
             });
         });
     }
@@ -224,18 +303,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (response.scheduleEnabled && response.alarm) {
-            if (response.actionType) {
-                currentActionType = response.actionType;
-                if (currentActionType === 'end') {
-                    typeEnd.click(); // Update UI
-                } else {
-                    typeLaunch.click();
-                }
+            if (response.actionType === 'end') {
+                typeEnd.click();
+            } else {
+                typeLaunch.click();
             }
             setUIScheduled(response.scheduledTime, response.alarm.scheduledTime);
         } else {
-            // Завжди скидаємо на "Запуск", якщо таймер зараз неактивний
-            currentActionType = 'launch';
             typeLaunch.click();
             setUIIdle();
         }
@@ -243,13 +317,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Натиснули "Запланувати"
     btnSchedule.addEventListener('click', () => {
-        // Форматуємо значення якщо користувач не клікнув поза полем
         inpHH.dispatchEvent(new Event('blur'));
         inpMM.dispatchEvent(new Event('blur'));
         
         const timeStr = `${inpHH.value}:${inpMM.value}`;
 
-        // Анімуємо кнопку
         btnSchedule.innerHTML = '<span style="opacity:0.7">Зберігаємо...</span>';
         btnSchedule.disabled = true;
 
@@ -289,14 +361,13 @@ document.addEventListener('DOMContentLoaded', () => {
         
         let actionWord = currentActionType === 'end' ? 'Зупинка' : 'Запуск';
         statusText.textContent = `${actionWord} о ${timeStr}`;
-        statusText.style.color = currentActionType === 'end' ? '#ff6b6b' : '#10B981';
-        statusDot.style.background = currentActionType === 'end' ? '#ff6b6b' : '#10B981';
-        statusDot.style.boxShadow = currentActionType === 'end' ? '0 0 8px rgba(255, 107, 107, 0.6)' : '0 0 8px rgba(16, 185, 129, 0.6)';
+        statusText.style.color = currentActionType === 'end' ? 'var(--cyber-pink)' : 'var(--cyber-cyan)';
+        statusDot.style.background = currentActionType === 'end' ? 'var(--cyber-pink)' : 'var(--cyber-cyan)';
+        statusDot.style.boxShadow = currentActionType === 'end' ? '0 0 10px var(--cyber-pink-glow)' : '0 0 10px var(--cyber-cyan-glow)';
         
         btnSchedule.style.display = 'none';
         btnCancel.style.display = 'flex';
         
-        // Візуально контримо поля вводу (щоб не відволікали увагу)
         timePickerUI.style.opacity = '0.5';
         timePickerUI.style.pointerEvents = 'none';
         actionTypeUI.style.opacity = '0.5';
@@ -304,7 +375,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         clearAllIntervals();
         updateCountdown(fireAtISO);
-        // Оновлюємо кожну секунду щоб відлік був "живим"
         countdownInterval = setInterval(() => updateCountdown(fireAtISO), 1000);
     }
 
@@ -350,14 +420,174 @@ document.addEventListener('DOMContentLoaded', () => {
         const s = totalSec % 60;
 
         if (totalSec < 60) {
-            // Менше хвилини
             countdownText.innerHTML = `Залишилось: <b>${s} сек</b>`;
         } else if (totalSec < 3600) {
-            // Менше години
             countdownText.innerHTML = `${currentActionType === 'end' ? 'До зупинки' : 'До запуску'}: <b>${m} хв ${s} сек</b>`;
         } else {
-            // Більше години
             countdownText.innerHTML = `${currentActionType === 'end' ? 'До зупинки' : 'До запуску'}: <b>${h}год ${m} хв ${s} сек</b>`;
         }
+    }
+    
+    // ────────────────────────────────────────────────────────────────
+    // ── TELEGRAM-МОНІТОРИНГ ──
+    // ────────────────────────────────────────────────────────────────
+
+    const tgEnabledCb  = document.getElementById('tg-enabled-cb');
+    const tgTokenInput = document.getElementById('tg-token');
+    const tgTokenToggle= document.getElementById('tg-token-toggle');
+    const tgChatIdInput= document.getElementById('tg-chat-id');
+    const tgDetectBtn  = document.getElementById('tg-detect-btn');
+    const tgSaveBtn    = document.getElementById('tg-save-btn');
+    const tgTestBtn    = document.getElementById('tg-test-btn');
+    const tgStatus     = document.getElementById('tg-status');
+    const tgHistoryList= document.getElementById('tg-history-list');
+
+    function tgSetStatus(msg, type) {
+        tgStatus.textContent = msg;
+        tgStatus.className = 'tg-status' + (type ? ' ' + type : '');
+    }
+
+    // Показати / сховати токен
+    tgTokenToggle.addEventListener('click', () => {
+        tgTokenInput.type = tgTokenInput.type === 'password' ? 'text' : 'password';
+    });
+
+    // Завантажити збережені налаштування при відкритті popup
+    chrome.storage.local.get(['tgSettings', 'tgHistory'], (data) => {
+        const s = data.tgSettings || {};
+        // Дефолт для нових користувачів: якщо enabled не задано, включити (enabled: true за замовчуванням)
+        tgEnabledCb.checked = s.enabled !== false; // undefined → true, false → false, true → true
+        tgTokenInput.value  = s.token  || '';
+        tgChatIdInput.value = s.chatId || '';
+        renderTgHistory(data.tgHistory || []);
+    });
+
+    // Рендер останніх 5 записів із tgHistory
+    function renderTgHistory(history) {
+        if (!tgHistoryList) return;
+        if (!history || !history.length) {
+            tgHistoryList.innerHTML = '<div class="tg-status" style="text-align:center;">Поки що проблем не зафіксовано 🎉</div>';
+            return;
+        }
+        const items = history.slice(0, 5);
+        tgHistoryList.innerHTML = items.map(entry => {
+            const d = new Date(entry.ts);
+            const dateStr = `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+            const rawTitle = (entry.videoTitle || '').substring(0, 30) + ((entry.videoTitle || '').length > 30 ? '…' : '');
+            const title = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const sentIcon = entry.sent ? '✈️' : '⚠️';
+            // insert_failed вже враховано в problems — fail окремо не додаємо
+            if (entry.kind === 'no_spots') {
+                return `<div class="tg-history-item">${sentIcon} <span style="color:var(--text-muted);flex-shrink:0;">${dateStr}</span> «${title}» — 🔴 ВСТИК: міток не поставлено (${entry.problems || '?'})</div>`;
+            }
+            return `<div class="tg-history-item">${sentIcon} <span style="color:var(--text-muted);flex-shrink:0;">${dateStr}</span> «${title}» — проблем: ${Math.max(entry.problems || 0, entry.fail || 0)}</div>`;
+        }).join('');
+    }
+
+    // Зберегти налаштування
+    tgSaveBtn.addEventListener('click', () => {
+        const token = tgTokenInput.value.trim();
+        const chatId = tgChatIdInput.value.trim();
+
+        // Валідація: якщо ввімкнено, потрібні token і chatId
+        if (tgEnabledCb.checked && (!token || !chatId)) {
+            tgSetStatus('⚠️ Потрібні токен бота та Chat ID!', 'error');
+            setTimeout(() => tgSetStatus('', ''), 4000);
+            return;
+        }
+
+        const settings = {
+            enabled: tgEnabledCb.checked && !!token && !!chatId, // Дефолтна безпека: вимкнути якщо невпадків
+            token:   token,
+            chatId:  chatId
+        };
+        chrome.storage.local.set({ tgSettings: settings }, () => {
+            tgSetStatus('✅ Збережено!', 'ok');
+            setTimeout(() => tgSetStatus('', ''), 2500);
+        });
+    });
+
+    // Визначити Chat ID
+    tgDetectBtn.addEventListener('click', () => {
+        const token = tgTokenInput.value.trim();
+        if (!token) { tgSetStatus('⚠️ Спочатку введіть токен бота', 'err'); return; }
+        tgDetectBtn.disabled = true;
+        tgSetStatus('🔍 Шукаю чати...', '');
+        chrome.runtime.sendMessage({ action: 'mra_tg_detect_chat', token }, (res) => {
+            tgDetectBtn.disabled = false;
+            if (chrome.runtime.lastError || !res) {
+                tgSetStatus('❌ Помилка з\'єднання', 'err');
+                return;
+            }
+            if (!res.ok) {
+                tgSetStatus('❌ ' + (res.error || 'Помилка') + '. Додайте бота в групу і напишіть туди будь-яке повідомлення', 'err');
+                return;
+            }
+            const chats = res.chats || [];
+            if (!chats.length) {
+                tgSetStatus('⚠️ Чатів не знайдено. Додайте бота в групу і напишіть туди будь-яке повідомлення', 'err');
+                return;
+            }
+            // Беремо останній груповий чат (group або supergroup)
+            const group = [...chats].reverse().find(c => c.type === 'group' || c.type === 'supergroup') || chats[chats.length - 1];
+            tgChatIdInput.value = String(group.id);
+            tgSetStatus(`✅ Знайдено: «${group.title}» (${group.type})`, 'ok');
+        });
+    });
+
+    // Тестове повідомлення
+    tgTestBtn.addEventListener('click', () => {
+        const token  = tgTokenInput.value.trim();
+        const chatId = tgChatIdInput.value.trim();
+        if (!token || !chatId) { tgSetStatus('⚠️ Введіть токен та Chat ID', 'err'); return; }
+        tgTestBtn.disabled = true;
+        tgSetStatus('📨 Надсилаємо тест...', '');
+        chrome.runtime.sendMessage({ action: 'mra_tg_test', token, chatId }, (res) => {
+            tgTestBtn.disabled = false;
+            if (chrome.runtime.lastError || !res) {
+                tgSetStatus('❌ Помилка з\'єднання', 'err');
+                return;
+            }
+            if (res.ok) {
+                tgSetStatus('✅ Надіслано!', 'ok');
+            } else {
+                tgSetStatus('❌ ' + (res.error || 'Невідома помилка'), 'err');
+            }
+        });
+    });
+
+    // ── Спеціальний функціонал для розтягування (Resize) Popup ──
+    const resizer = document.getElementById('popup-resizer');
+    let isResizing = false;
+
+    if (resizer) {
+        const savedWidth = localStorage.getItem('mraPopupWidth');
+        const cap = Math.min(600, window.screen.availWidth - 40 || 600);
+        let w = savedWidth ? parseInt(savedWidth, 10) : 540;
+        if (!Number.isFinite(w)) w = 540;
+        w = Math.max(320, Math.min(w, cap));
+        document.body.style.width = w + 'px';
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.body.style.transition = 'none';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            let newWidth = e.clientX + 8;
+            const cap = Math.min(600, window.screen.availWidth - 40 || 600);
+            if (newWidth < 320) newWidth = 320;
+            if (newWidth > cap) newWidth = cap;
+
+            document.body.style.width = newWidth + 'px';
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                localStorage.setItem('mraPopupWidth', document.body.style.width);
+            }
+        });
     }
 });
