@@ -7,17 +7,22 @@ const ALARM_NAME = 'mra_stream_launch';
 
 // ── Ініціалізація при встановленні або оновленні ──
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get('tgSettings', (data) => {
-    // Якщо tgSettings не існують, створимо з дефолтом: Telegram увімкнено, але без token/chatId
+  chrome.storage.local.get(['tgSettings', 'tgEnabledMigrated'], (data) => {
     if (!data.tgSettings) {
       chrome.storage.local.set({
-        tgSettings: {
-          enabled: true,  // За замовчуванням ввімкнено!
-          token: '',
-          chatId: ''
-        }
+        tgSettings: { enabled: true, token: '', chatId: '' },
+        tgEnabledMigrated: true
       });
       console.log('[TSN MANAGER BG] ✅ Initialized tgSettings with enabled=true');
+    } else if (data.tgSettings.enabled === false && !data.tgEnabledMigrated) {
+      // Старий баг: enabled=false записувався мовчки за замовчуванням. Одноразово вмикаємо.
+      chrome.storage.local.set({
+        tgSettings: { ...data.tgSettings, enabled: true },
+        tgEnabledMigrated: true
+      });
+      console.log('[TSN MANAGER BG] ✅ Migrated tgSettings.enabled false→true (one-time)');
+    } else if (!data.tgEnabledMigrated) {
+      chrome.storage.local.set({ tgEnabledMigrated: true });
     }
   });
 });
@@ -858,6 +863,35 @@ function buildTgReport(report) {
     return text;
   }
 
+  // ── ПОПЕРЕДЖЕННЯ: складний монтаж / міток менше за ідеал (звіт одразу після аналізу) ──
+  if (report.kind === 'analysis_warn') {
+    const an = report.analysis || {};
+    const selectedCount = report.selectedCount || 0;
+    let lines = [];
+    lines.push(`🟠 <b>ТСН Менеджер — СКЛАДНИЙ МОНТАЖ: мало природних пауз</b>`);
+    lines.push('');
+    lines.push(`📹 Відео: «${tgEscape(videoTitle)}»`);
+    lines.push(`⏱ Хронометраж: ${durStr}`);
+    if (studioUrl) lines.push(`🔗 <a href="${studioUrl}">Відкрити редактор</a>`);
+    lines.push('');
+    lines.push(`📊 <b>Мітки:</b> ${selectedCount} із ~${an.idealAds || '?'} ідеальних. Природних пауз: ${an.realPauses || 0}, запасних (у «найтихіших місцях»): ${an.backupCount || 0}.`);
+    if (an.escalated) lines.push(`🤖 Бот сам підняв чутливість до ${an.finalThr}% (пауза ≥${an.finalMinS}с), але природних пауз все одно мало.`);
+    if (Array.isArray(report.marks) && report.marks.length) {
+      lines.push('');
+      lines.push(`<i>Поставлені позиції:</i>`);
+      report.marks.forEach((m, i) => {
+        lines.push(`${i + 1}. ${tgEscape(m.tc)} — ${m.backup ? '🛟 запасна' : `✅ пауза${m.quality ? ' ' + tgEscape(m.quality) : ''}`}`);
+      });
+    }
+    lines.push('');
+    lines.push(`⚠️ <b>Наслідок:</b> YouTube може рідше показувати рекламу в запасних мітках, а частини доходу бракуватиме через нестачу міток.`);
+    lines.push('');
+    lines.push(`👉 <b>Що робити:</b> відкрити редактор, прослухати запасні мітки і за можливості пересунути їх у реальні паузи; якщо міток мало — додати вручну.`);
+    const text = lines.join('\n');
+    if (text.length > 4000) return text.substring(0, 3997) + '…';
+    return text;
+  }
+
   // ── Звичайний звіт про вставку ──
   const allProblems = (events || []).filter(ev => ev.type !== 'yt_flag_moved');
   const movedOk = (events || []).filter(ev => ev.type === 'yt_flag_moved');
@@ -1031,7 +1065,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         kind: request.report.kind || 'insert',
         problems: request.report.kind === 'no_spots'
           ? ((request.report.analysis && request.report.analysis.idealAds) || 1)
-          : (request.report.events || []).filter(ev => ev.type !== 'yt_flag_moved').length,
+          : request.report.kind === 'analysis_warn'
+            ? ((request.report.analysis && request.report.analysis.backupCount) || 0) + Math.max(0, ((request.report.analysis && request.report.analysis.idealAds) || 0) - (request.report.selectedCount || 0))
+            : (request.report.events || []).filter(ev => ev.type !== 'yt_flag_moved').length,
         sent: false,
         error: ''
       };
@@ -1044,7 +1080,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         hasChatId: !!s.chatId
       });
 
-      if (s.enabled && s.token && s.chatId) {
+      if (s.enabled !== false && s.token && s.chatId) {
         try {
           console.log('[TSN MANAGER BG] 📤 Sending Telegram message...');
           const res = await tgApi(s.token, 'sendMessage', {

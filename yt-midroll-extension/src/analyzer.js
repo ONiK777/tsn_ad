@@ -846,6 +846,8 @@ async function _doAnalyze() {
     state.selected.length > 0 ? 'success' : 'warn'
   );
 
+  maybeSendAnalysisReport();
+
   state.silences = rawSilences;
 
   // Зберігаємо дані для візуалізації
@@ -861,6 +863,58 @@ async function _doAnalyze() {
   renderSelectedList();
   renderWaveform();
   return true;
+}
+
+// Авто-звіт у Telegram одразу після аналізу: спрацьовує коли вердикт гірший за «ДОБРЕ»
+// (мало природних пауз) або міток менше за ідеал. Дедуплікація по videoId на 12 годин.
+async function maybeSendAnalysisReport() {
+  try {
+    const meta = state.analysisMeta;
+    if (!meta || !meta.idealAds) return;
+    const share = (meta.realPauses || 0) / meta.idealAds;
+    const shortage = state.selected.length < meta.idealAds;
+    if (share >= 0.6 && !shortage) return; // ЛЮКС/ДОБРЕ і міток достатньо — не турбуємо
+
+    const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
+    const videoId = videoIdMatch ? videoIdMatch[1] : (state.waveformUrl || 'unknown').slice(-40);
+
+    // Дедуплікація: не частіше ніж раз на 12 год на відео (читаємо тут, позначаємо ЛИШЕ після успішної відправки)
+    const { tgAnalysisReported } = await chrome.storage.local.get('tgAnalysisReported');
+    const map = tgAnalysisReported || {};
+    if (map[videoId] && Date.now() - map[videoId] < 12 * 3600 * 1000) {
+      console.log('[TSN ANALYZER] 📨 Аналіз-звіт уже надсилався для', videoId, '— пропускаю (дедуплікація 12г)');
+      return;
+    }
+
+    const videoTitle = document.title.replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim() || 'Невідоме відео';
+    console.log('[TSN ANALYZER] 📨 Надсилаю аналіз-звіт (складний монтаж/мало міток):', { videoTitle, share, selected: state.selected.length, ideal: meta.idealAds });
+    chrome.runtime.sendMessage({
+      action: 'mra_tg_report',
+      report: {
+        kind: 'analysis_warn',
+        ts: Date.now(),
+        videoTitle,
+        videoId: videoIdMatch ? videoIdMatch[1] : '',
+        videoUrl: window.location.href,
+        videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
+        analysis: meta,
+        selectedCount: state.selected.length,
+        marks: state.selected.slice(0, 10).map(s => ({ tc: s.timecode, backup: !!s.fallbackSpot, quality: s.quality_label || '' })),
+        totalPlanned: 0, ok: 0, fail: 0, events: []
+      }
+    }, async (res) => {
+      if (chrome.runtime.lastError) { console.warn('[TSN ANALYZER] ⚠️ Аналіз-звіт: помилка каналу —', chrome.runtime.lastError.message); return; }
+      if (!res || !res.ok) { console.warn('[TSN ANALYZER] ⚠️ Аналіз-звіт не доставлено (Telegram не налаштовано/помилка) — дедуп НЕ ставлю, спробую наступного разу'); return; }
+      // Успіх — тепер фіксуємо дедуплікацію на 12 год
+      const fresh = (await chrome.storage.local.get('tgAnalysisReported')).tgAnalysisReported || {};
+      fresh[videoId] = Date.now();
+      const keys = Object.keys(fresh);
+      if (keys.length > 50) keys.sort((a, b) => fresh[a] - fresh[b]).slice(0, keys.length - 50).forEach(k => delete fresh[k]);
+      await chrome.storage.local.set({ tgAnalysisReported: fresh });
+    });
+  } catch (e) {
+    console.error('[TSN ANALYZER] ❌ Помилка аналіз-звіту:', e);
+  }
 }
 
 // ─── АВТОВСТАВКА ─────────────────────────────────────────────────────────────
@@ -1096,7 +1150,13 @@ async function maybeFullAutoRun() {
     await sleep(2500);
     if (!document.getElementById('mra-panel')) return;
     if (getAdBreakDeleteButtons().length > 0) {
-      log('⚡ Авто-вставка: на відео вже є мітки — пропускаю (нічого не чіпаю)', 'info');
+      log('⚡ Авто-вставка: на відео вже є мітки — вставку пропускаю (нічого не чіпаю)', 'info');
+      // Але аналіз все одно запускаємо: якщо монтаж складний — Telegram-звіт піде і без вставки
+      // (maybeSendAnalysisReport усередині analyzeWaveform, з дедуплікацією 12 год по відео)
+      if (!state.analysisMeta && !state.analyzing) {
+        log('⚡ Запускаю аналіз лише для звіту (без вставки)...', 'info');
+        try { await analyzeWaveform(); } catch (e) { log('⚡ Аналіз для звіту не вдався: ' + e.message, 'warn'); }
+      }
       return;
     }
 
