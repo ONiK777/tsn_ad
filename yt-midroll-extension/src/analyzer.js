@@ -932,7 +932,7 @@ async function maybeSendAnalysisReport() {
         selectedCount: state.selected.length,
         marksOnVideo,
         qualityAvg,
-        marks: state.selected.slice(0, 10).map(s => ({
+        marks: state.selected.slice(0, 25).map(s => ({
           tc: s.timecode,
           backup: !!s.fallbackSpot,
           quality: s.quality_label || '',
