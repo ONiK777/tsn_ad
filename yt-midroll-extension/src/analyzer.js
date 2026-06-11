@@ -889,14 +889,16 @@ async function _doAnalyze() {
 }
 
 // Авто-звіт у Telegram одразу після аналізу: спрацьовує коли вердикт гірший за «ДОБРЕ»
-// (мало природних пауз) або міток менше за ідеал. Дедуплікація по videoId на 12 годин.
+// (share природних пауз < 0.6 — той самий поріг, що на панелі). Дедуплікація по videoId на 12 годин.
 async function maybeSendAnalysisReport() {
   try {
     const meta = state.analysisMeta;
     if (!meta || !meta.idealAds) return;
     const share = (meta.realPauses || 0) / meta.idealAds;
-    const shortage = state.selected.length < meta.idealAds;
-    if (share >= 0.6 && !shortage) return; // ЛЮКС/ДОБРЕ і міток достатньо — не турбуємо
+    // Звітуємо ЛИШЕ коли вердикт гірший за «ДОБРЕ» — той самий поріг, що й на панелі (render.js).
+    // share вже враховує і запасні мітки, і нестачу (природних ≤ поставлених), тому окремої
+    // перевірки нестачі не треба — інакше 7/8 суцільно природних міток лякало б даремно.
+    if (share >= 0.6) return;
 
     const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
     const videoId = videoIdMatch ? videoIdMatch[1] : (state.waveformUrl || 'unknown').slice(-40);
