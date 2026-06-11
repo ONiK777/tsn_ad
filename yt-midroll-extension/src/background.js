@@ -868,81 +868,57 @@ function buildTgReport(report) {
     const an = report.analysis || {};
     const selectedCount = report.selectedCount || 0;
     const idealStr = an.idealAds ? `~${an.idealAds}` : 'кілька';
+    const bc = an.backupCount || 0;
+    const rp = an.realPauses || 0;
+
     let lines = [];
-    lines.push(`🟠 <b>ТСН Менеджер — складний монтаж: реклама стане не скрізь</b>`);
+    lines.push(`🟠 <b>У цьому відео мало пауз — частина реклами може не показатись</b>`);
     lines.push('');
-    lines.push(`📹 <b>Відео:</b> «${tgEscape(videoTitle)}»`);
-    lines.push(`⏱ <b>Хронометраж:</b> ${durStr}`);
+    lines.push(`📹 «${tgEscape(videoTitle)}»`);
+    lines.push(`⏱ ${durStr}`);
     if (studioUrl) {
       lines.push(`🔗 <b><a href="${studioUrl}">Відкрити редактор у YouTube Studio</a></b>`);
     }
     lines.push('');
-    
-    const bc = an.backupCount || 0;
-    const rp = an.realPauses || 0;
-    
-    lines.push(`📊 <b>Рахунок міток:</b>`);
-    lines.push(`• Рекомендовано YouTube: <b>${idealStr}</b> (1 мітка на ~2 хв)`);
-    lines.push(`• Бот підібрав: <b>${selectedCount}</b> міток`);
-    lines.push(`    🟢 у природних паузах: <b>${rp}</b>`);
+
+    lines.push(`📊 <b>Коротко:</b>`);
+    lines.push(`• YouTube радить на таке відео: <b>${idealStr}</b> реклам`);
+    lines.push(`• Бот поставив: <b>${selectedCount}</b>`);
+    lines.push(`    🟢 <b>${rp}</b> — у справжніх паузах, тут усе добре`);
     if (bc > 0) {
-      lines.push(`    🔺 запасних (найтихіші місця): <b>${bc}</b>`);
+      lines.push(`    🔺 <b>${bc}</b> — у «так собі» місцях, бо пауз не вистачило`);
     }
     if (typeof report.marksOnVideo === 'number' && report.marksOnVideo > 0) {
-      lines.push(`• Вже було на відео: <b>${report.marksOnVideo}</b> (без змін)`);
+      lines.push(`• На відео вже стояли мітки (<b>${report.marksOnVideo}</b> шт.) — бот їх не чіпав`);
     }
-    if (report.qualityAvg != null) {
-      const qWord = report.qualityAvg >= 78 ? '🔥 люкс' : (report.qualityAvg >= 55 ? '👍 добра' : '⚠️ так собі');
-      lines.push(`• Середня якість пауз: <b>${report.qualityAvg}%</b> (${qWord})`);
-    }
-    
-    if (an.escalated) {
-      lines.push('');
-      lines.push(`🤖 <i>Бот автоматично підняв чутливість пошуку до ${an.finalThr}% (мін. тиша ${an.finalMinS} с), бо вільних пауз не вистачало.</i>`);
-    }
-    
+
     // Показуємо ЛИШЕ запасні мітки — природні видно в рахунку, перевіряти їх не треба
     const backupMarks = (Array.isArray(report.marks) ? report.marks : []).filter(m => m.backup);
     if (backupMarks.length) {
       lines.push('');
-      lines.push(`🔺 <b>Запасні мітки — варто перевірити вручну:</b>`);
+      lines.push(`🔺 <b>Ось ці місця. Якщо є хвилинка — переслухайте їх у редакторі:</b>`);
       lines.push('');
       backupMarks.forEach((m, i) => {
-        const q = m.score != null ? `тихіше середнього на ${m.score}%` : 'найтихіше місце у вікні';
-        let risk = '';
+        let chance = 'реклама тут під питанням';
         if (m.score != null) {
-          const r = m.score >= 70 ? 'низький, ~25%' : (m.score >= 50 ? 'середній, ~50%' : 'високий, ~70%');
-          risk = `\n    ризик, що YouTube її пропустить: <b>${r}</b>`;
+          chance = m.score >= 70
+            ? 'реклама скоріш за все покажеться'
+            : (m.score >= 50 ? 'реклама тут 50 на 50' : 'реклама скоріш за все НЕ покажеться');
         }
-        lines.push(`<b>${i + 1}.</b> ${tgEscape(m.tc)} — ${q}${risk}`);
+        lines.push(`<b>${i + 1}.</b> ${tgEscape(m.tc)} — ${chance}`);
       });
       if (bc > backupMarks.length) {
-        lines.push('');
-        lines.push(`<i>…та ще ${bc - backupMarks.length} запасних</i>`);
+        lines.push(`<i>…і ще ${bc - backupMarks.length} таких місць</i>`);
       }
-      lines.push('');
-      lines.push(`<i>Ризик — орієнтовна оцінка: що тихіше місце відносно середньої гучності відео, то охочіше YouTube ставить туди рекламу.</i>`);
     }
-    
-    lines.push('');
-    lines.push(`ℹ️ <b>Що це означає:</b>`);
-    lines.push('');
-    lines.push(`🟢 <b>Природна пауза</b> — справжня тиша між реченнями чи сюжетами. Реклама тут виглядає органічно, а YouTube її охоче показує.`);
-    if (bc > 0) {
-      lines.push('');
-      lines.push(`🔺 <b>Запасна мітка</b> — паузи не було, бот обрав найтихіше доступне місце. Реклама там може обірвати мову посеред речення.`);
-    }
-    
-    lines.push('');
-    lines.push(`⚠️ <b>Чим це загрожує (ризики):</b>`);
+
     lines.push('');
     if (bc > 0) {
-      lines.push(`• <b>Рідші покази:</b> у запасних місцях (🔺) реклама може показуватися рідше або взагалі ігноруватися алгоритмами.`);
-      lines.push(`• <b>Втрата доходу:</b> через брак природних пауз встановлено менше міток (<b>${selectedCount}</b> замість <b>${idealStr}</b>). Відео принесе менше прибутку.`);
+      lines.push(`💡 <b>Простими словами:</b> реклама найкраще спрацьовує в тиші між реченнями. У цьому відео такої тиші мало, тож частину реклам бот поставив просто в найтихіші місця. YouTube такі місця інколи пропускає — реклами там не буде, і відео заробить менше, ніж могло б.`);
     } else {
-      lines.push(`• <b>Втрата доходу:</b> встановлено менше міток, ніж рекомендує YouTube (<b>${selectedCount}</b> замість <b>${idealStr}</b>). Частина рекламних показів буде втрачена.`);
+      lines.push(`💡 <b>Простими словами:</b> у відео мало тиші між реченнями, тому реклам вийшло менше, ніж радить YouTube (${selectedCount} замість ${idealStr}). Менше реклами — менший заробіток.`);
     }
-    
+
     const text = lines.join('\n');
     if (text.length > 4000) return text.substring(0, 3997) + '…';
     return text;
