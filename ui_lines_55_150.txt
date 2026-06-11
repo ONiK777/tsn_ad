@@ -1,0 +1,41 @@
+Created At: 2026-06-09T16:07:09Z
+Completed At: 2026-06-09T16:07:09Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 778
+Total Bytes: 42593
+Showing lines 55 to 150
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+55:   if (document.getElementById('mra-panel')) return;
+56: 
+57:   const panel = document.createElement('div');
+58:   panel.id = 'mra-panel';
+59:   panel.innerHTML = `
+60: <style>
+61: #mra-panel{position:fixed;top:72px;right:16px;z-index:99999;background:rgba(18,18,20,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#e0e0e0;border-radius:12px;border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 40px rgba(0,0,0,0.8), 0 0 20px rgba(229,46,46,0.15);font-family:'Roboto',sans-serif;font-size:11px;width:310px;overflow:hidden;user-select:none;display:flex;flex-direction:column;max-height:calc(100vh - 100px);transition:box-shadow 0.3s ease, opacity 0.3s ease;resize:both;min-width:280px;min-height:200px;}
+62: #mra-header{background:rgba(0,0,0,0.3);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid rgba(229,46,46,0.4);flex-shrink:0;}
+63: #mra-title{font-weight:900;font-size:13px;color:#ffffff;text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;text-shadow:0 0 8px rgba(255,255,255,0.2);}
+64: #mra-minimize, #mra-close, #mra-reload{background:none;border:none;color:#888;cursor:pointer;font-size:16px;padding:0;line-height:1;margin-left:6px;transition:all 0.2s;}
+65: #mra-minimize:hover{color:#fff;text-shadow:0 0 8px rgba(255,255,255,0.5);}
+66: #mra-close:hover{color:#ff4d4d;text-shadow:0 0 8px rgba(255,77,77,0.5);}
+67: #mra-reload:hover{color:#06d6a0;text-shadow:0 0 8px rgba(6,214,160,0.5);}
+68: #mra-body{padding:8px 10px;overflow-y
+<truncated 9111 bytes>
+nd:rgba(148,163,184,.16);box-shadow:inset 0 0 0 1px rgba(148,163,184,.12);}
+134: .mra-wave-hints-copy{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+135: .mra-wave-state{padding:3px 6px;border-radius:999px;background:rgba(245,158,11,.14);color:#fbbf24;font-weight:900;text-transform:uppercase;letter-spacing:.35px;}
+136: .mra-wave-hints-toggle.is-off .mra-wave-state{background:rgba(148,163,184,.1);color:#7b8493;}
+137: .mra-wave-legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;color:#778294;font-size:8.8px;}
+138: .mra-wave-chip{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
+139: .mra-wave-swatch{width:13px;height:2px;border-radius:999px;display:inline-block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,.42);}
+140: .mra-wave-swatch.manual{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.35);}
+141: .mra-wave-swatch.sound{width:5px;height:11px;background:#d1d5db;box-shadow:none;}
+142: .mra-wave-swatch.hint{width:2px;height:11px;background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.28);}
+143: @keyframes mra-pulse-red{0%,100%{box-shadow:0 0 5px rgba(229,46,46,0.2);border-color:rgba(229,46,46,0.3)}50%{box-shadow:0 0 15px rgba(229,46,46,0.8);border-color:rgba(229,46,46,0.8)}}
+144: @keyframes mra-pulse-yellow{0%,100%{box-shadow:0 0 5px rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3)}50%{box-shadow:0 0 15px rgba(251,191,36,0.8);border-color:rgba(251,191,36,0.8)}}
+145: .mra-pulse-red{animation:mra-pulse-red 2s ease-in-out infinite}
+146: .mra-pulse-yellow{animation:mra-pulse-yellow 2.5s ease-in-out infinite}
+147: </style>
+148: 
+149: <div id="mra-header">
+150:   <div id="mra-title"><span style="background:#E52E2E;color:#fff;padding:2px 6px;border-radius:4px;margin-right:8px;box-shadow:0 0 10px rgba(229,46,46,0.5);">ТСН</span> АВТОРЕКЛАМА</div>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

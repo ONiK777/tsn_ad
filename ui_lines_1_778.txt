@@ -1,0 +1,91 @@
+Created At: 2026-06-09T16:06:00Z
+Completed At: 2026-06-09T16:06:00Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 778
+Total Bytes: 42593
+Showing lines 1 to 778
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: // ─── ШАБЛОНИ UI ──────────────────────────────────────────────────────────────
+2: function row(label, ctrl, hint = '') {
+3:   const tipHtml = hint
+4:     ? `<span style="cursor:help;margin-left:3px;opacity:0.5;font-size:10px;flex-shrink:0;" title="${hint.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}">ℹ️</span>`
+5:     : '';
+6:   return `<div class="mr"><span class="ml">${label}${tipHtml}</span><span class="mc">${ctrl}</span></div>`;
+7: }
+8: 
+9: 
+10: function stepper(id, val, min, max, step) {
+11:   return `<div class="stp" data-id="${id}" data-val="${val}" data-min="${min}" data-max="${max}" data-step="${step}">
+12:     <button class="mcb stp-m">−</button>
+13:     <input type="text" class="stp-v" value="${val}" spellcheck="false" readonly title="Натисніть щоб ввести значення вручну">
+14:     <button class="mcb stp-p">+</button>
+15:   </div>`;
+16: }
+17: 
+18: function getVal(id) {
+19:   const el = document.querySelector(`.stp[data-id="${id}"] .stp-v`);
+20:   return el ? parseFloat(el.value) : null;
+21: }
+22: 
+23: function _setStepperVal(id, val) {
+24:   const el = document.querySelector(`.stp[data-id="${id}"] .stp-v`);
+25:   if (el && val !== undefined && val !== null) el.value = val;
+26: }
+27: 
+28: function _restoreSettingsToUI() {
+29:   _setStepperVal('mra-min-silence', CONFIG.minSilenceSec);
+30:   _setStepperVal('mra-threshold', CONFIG.sile
+<truncated 42835 bytes>
+
+728:     if (e.target.tagName === 'BUTTON') return;
+729:     isDragging = true; sx = e.clientX; sy = e.clientY;
+730:     const r = panel.getBoundingClientRect(); sl = r.left; st = r.top;
+731:     panel.style.right = 'auto';
+732:   });
+733: 
+734:   const onMouseMove = e => {
+735:     if (!isDragging) return;
+736:     panel.style.left = (sl + e.clientX - sx) + 'px';
+737:     panel.style.top = (st + e.clientY - sy) + 'px';
+738:   };
+739:   const onMouseUp = () => { isDragging = false; };
+740: 
+741:   addTrackedEventListener(document, 'mousemove', onMouseMove);
+742:   addTrackedEventListener(document, 'mouseup', onMouseUp);
+743: }
+744: 
+745: function createReopenButton() {
+746:   if (document.getElementById('mra-reopen-btn')) return;
+747:   const btn = document.createElement('button');
+748:   btn.id = 'mra-reopen-btn';
+749:   btn.innerHTML = '⚡ Відкрити ТСН АвтоРеклама';
+750:   btn.style.cssText = `
+751:     position: fixed;
+752:     bottom: 24px;
+753:     right: 24px;
+754:     z-index: 10000;
+755:     background: #e63946;
+756:     color: white;
+757:     border: none;
+758:     border-radius: 8px;
+759:     padding: 12px 24px;
+760:     font-size: 15px;
+761:     font-family: 'YouTube Noto', Roboto, Arial, sans-serif;
+762:     font-weight: 500;
+763:     cursor: pointer;
+764:     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+765:     transition: 0.2s;
+766:   `;
+767:   btn.onmouseover = () => { btn.style.transform = 'scale(1.05)'; btn.style.background = '#ff4d5a'; };
+768:   btn.onmouseout = () => { btn.style.transform = 'scale(1)'; btn.style.background = '#e63946'; };
+769: 
+770:   btn.addEventListener('click', () => {
+771:     isPanelClosedByUser = false;
+772:     btn.remove();
+773:     // MutationObserver відразу помітить isPanelClosedByUser = false і створить нову панель
+774:   });
+775: 
+776:   document.body.appendChild(btn);
+777: }
+778: 
+The above content shows the entire, complete file contents of the requested file.

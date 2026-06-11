@@ -28,6 +28,8 @@ function init() {
           state.waveformUrl ? '✅ Натисніть "Аналізувати"' : '⏳ Очікуємо завантаження відео...',
           state.waveformUrl ? 'success' : 'info'
         );
+
+        if (typeof maybeFullAutoRun === 'function') maybeFullAutoRun();
       } else if (isAdBreaksPage && isPanelClosedByUser) {
         if (!document.getElementById('mra-reopen-btn')) {
           createReopenButton();

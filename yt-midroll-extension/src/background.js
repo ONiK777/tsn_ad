@@ -5,6 +5,55 @@
 
 const ALARM_NAME = 'mra_stream_launch';
 
+// ── Ініціалізація при встановленні або оновленні ──
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.get('tgSettings', (data) => {
+    // Якщо tgSettings не існують, створимо з дефолтом: Telegram увімкнено, але без token/chatId
+    if (!data.tgSettings) {
+      chrome.storage.local.set({
+        tgSettings: {
+          enabled: true,  // За замовчуванням ввімкнено!
+          token: '',
+          chatId: ''
+        }
+      });
+      console.log('[TSN MANAGER BG] ✅ Initialized tgSettings with enabled=true');
+    }
+  });
+});
+
+// ── Сповіщення з перевіркою налаштувань ──
+// Категорії: 'notif-stream-live', 'notif-stream-ended', 'notif-command-sent',
+//            'notif-plan', 'notif-steps', 'notif-plan-done', 'notif-errors', 'notif-smart'
+function notify(id, opts, category) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get('notifSettings', (data) => {
+        if (chrome.runtime.lastError) {
+          console.error('[TSN MANAGER BG] Storage get error:', chrome.runtime.lastError.message);
+          resolve(false);
+          return;
+        }
+        const s = (data && data.notifSettings) || {};
+        if (s._master === false) { resolve(false); return; }
+        if (category && s[category] === false) { resolve(false); return; }
+
+        chrome.notifications.create(id, opts, () => {
+          if (chrome.runtime.lastError) {
+            console.error('[TSN MANAGER BG] chrome.notifications.create error:', chrome.runtime.lastError.message);
+            resolve(false);
+          } else {
+            resolve(true);
+          }
+        });
+      });
+    } catch (e) {
+      console.error('[TSN MANAGER BG] Exception inside notify:', e);
+      resolve(false);
+    }
+  });
+}
+
 // ── Допоміжні функції для Action Plan ──
 function getStreamTitleFromTab(tab) {
   return (tab.title || '').replace(/\s*[-–|]?\s*YouTube Studio\s*$/i, '').trim().substring(0, 40) || 'Трансляція';
@@ -122,15 +171,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       }
       await broadcastPlan(plan);
 
-      try {
-        const modeLabel = endBeforeLaunch ? 'Спочатку END → потім GO LIVE' : 'Спочатку GO LIVE → потім END';
-        chrome.notifications.create('mra_found_notify', {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: `🔄 ПЛАН ДІЙ: ${plan.steps.length} кроків`,
-          message: `${modeLabel}: ${liveTabs.length} завершити + ${notLiveTabs.length} запустити`
-        });
-      } catch (e) { }
+      const modeLabel = endBeforeLaunch ? 'Спочатку END → потім GO LIVE' : 'Спочатку GO LIVE → потім END';
+      await notify('mra_found_notify', {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: `🔄 ПЛАН ДІЙ: ${plan.steps.length} кроків`,
+        message: `${modeLabel}: ${liveTabs.length} завершити + ${notLiveTabs.length} запустити`
+      }, 'notif-plan');
 
       await new Promise(r => setTimeout(r, 1000));
 
@@ -150,7 +197,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           await new Promise(r => setTimeout(r, 1000));
 
           const endVerifiedPromise = new Promise((resolve) => {
-            const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 20000);
+            // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
+            const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
             const listener = (req) => {
               if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
             };
@@ -161,19 +209,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             if (chrome.runtime.lastError) console.warn('End fail:', chrome.runtime.lastError.message);
           });
 
-          await endVerifiedPromise;
+          const endOk = await endVerifiedPromise;
           plan.steps[stepIdx].duration = Math.round((Date.now() - stepStart) / 1000);
-          plan.steps[stepIdx].status = 'done';
+          // Якщо завершення не підтвердилось — крок failed, але запуск нових НЕ зупиняємо:
+          // новий ефір пріоритетніший, оператор побачить ❌ і завершить старий вручну.
+          plan.steps[stepIdx].status = endOk ? 'done' : 'failed';
           stepIdx++;
           await broadcastPlan(plan);
 
-          try {
-            chrome.notifications.create('mra_step_' + Date.now(), {
-              type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-              title: `⏹ Крок ${stepIdx}/${plan.steps.length}`,
-              message: `«${plan.steps[stepIdx-1].title}» — ЗАВЕРШЕНО!`
-            });
-          } catch (e) {}
+          if (!endOk) console.warn('[TSN MANAGER BG] ⚠️ End NOT confirmed for tab', liveTabs[i].tab.id);
+          await notify('mra_step_' + Date.now(), {
+            type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+            title: endOk ? `⏹ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
+            message: endOk
+              ? `«${plan.steps[stepIdx-1].title}» — ЗАВЕРШЕНО!`
+              : `«${plan.steps[stepIdx-1].title}» — завершення НЕ підтверджено! Перевірте вкладку.`
+          }, 'notif-steps');
 
           plan.detail = '⏳ Cooldown 12с (чекаємо звільнення ключа)...';
           await broadcastPlan(plan);
@@ -213,14 +264,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           stepIdx++;
           await broadcastPlan(plan);
 
-          try {
-            const ok = result === 'mra_live_verified';
-            chrome.notifications.create('mra_step_' + Date.now(), {
-              type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-              title: ok ? `✅ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
-              message: ok ? `«${plan.steps[stepIdx-1].title}» — НАЖИВО!` : `«${plan.steps[stepIdx-1].title}» — не вдалося`
-            });
-          } catch (e) {}
+          const ok = result === 'mra_live_verified';
+          await notify('mra_step_' + Date.now(), {
+            type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+            title: ok ? `✅ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
+            message: ok ? `«${plan.steps[stepIdx-1].title}» — НАЖИВО!` : `«${plan.steps[stepIdx-1].title}» — не вдалося`
+          }, 'notif-steps');
 
           if (i < notLiveTabs.length - 1) {
             plan.detail = '⏳ Cooldown 8с...';
@@ -271,14 +320,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             stepIdx++;
             await broadcastPlan(plan);
 
-            try {
-              const ok = result === 'mra_live_verified';
-              chrome.notifications.create('mra_step_' + Date.now(), {
-                type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-                title: ok ? `✅ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
-                message: ok ? `«${plan.steps[stepIdx-1].title}» — НАЖИВО!` : `«${plan.steps[stepIdx-1].title}» — не вдалося`
-              });
-            } catch (e) {}
+            const ok = result === 'mra_live_verified';
+            await notify('mra_step_' + Date.now(), {
+              type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+              title: ok ? `✅ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
+              message: ok ? `«${plan.steps[stepIdx-1].title}» — НАЖИВО!` : `«${plan.steps[stepIdx-1].title}» — не вдалося`
+            }, 'notif-steps');
           }
 
           if (oldTab && result === 'mra_live_verified') {
@@ -293,7 +340,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             await new Promise(r => setTimeout(r, 1000));
 
             const endVerifiedPromise = new Promise((resolve) => {
-              const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 20000);
+              // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
+              const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
               const listener = (req) => {
                 if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
               };
@@ -304,19 +352,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
               if (chrome.runtime.lastError) console.warn('End fail:', chrome.runtime.lastError.message);
             });
 
-            await endVerifiedPromise;
+            const endOk = await endVerifiedPromise;
             plan.steps[stepIdx].duration = Math.round((Date.now() - stepStart) / 1000);
-            plan.steps[stepIdx].status = 'done';
+            plan.steps[stepIdx].status = endOk ? 'done' : 'failed';
             stepIdx++;
             await broadcastPlan(plan);
 
-            try {
-              chrome.notifications.create('mra_step_' + Date.now(), {
-                type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-                title: `✅ Крок ${stepIdx}/${plan.steps.length}`,
-                message: `«${plan.steps[stepIdx-1].title}» — ЗАВЕРШЕНО!`
-              });
-            } catch (e) {}
+            if (!endOk) console.warn('[TSN MANAGER BG] ⚠️ End NOT confirmed for tab', oldTab.tab.id);
+            await notify('mra_step_' + Date.now(), {
+              type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+              title: endOk ? `✅ Крок ${stepIdx}/${plan.steps.length}` : `❌ Крок ${stepIdx}/${plan.steps.length}`,
+              message: endOk
+                ? `«${plan.steps[stepIdx-1].title}» — ЗАВЕРШЕНО!`
+                : `«${plan.steps[stepIdx-1].title}» — завершення НЕ підтверджено! Перевірте вкладку.`
+            }, 'notif-steps');
 
             plan.detail = '⏳ Cooldown 8с...';
             await broadcastPlan(plan);
@@ -338,14 +387,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       }
 
       await broadcastPlan(plan); // Фінальний стан
-      try {
-        chrome.notifications.create('mra_done_notify', {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: '✅ ТСН — План виконано!',
-          message: `Всі ${plan.steps.length} кроків завершено.`
-        });
-      } catch (e) {}
+      const doneSteps = plan.steps.filter(s => s.status === 'done').length;
+      const planOk = doneSteps === plan.steps.length;
+      await notify('mra_done_notify', {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: planOk ? '✅ ТСН — План виконано!' : '⚠️ ТСН — План виконано частково',
+        message: planOk
+          ? `Всі ${plan.steps.length} кроків завершено.`
+          : `Успішно: ${doneSteps} з ${plan.steps.length}. Перевірте кроки з ❌!`
+      }, 'notif-plan-done');
 
       return;
     }
@@ -354,13 +405,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (data.actionType === 'end') {
       if (liveTabs.length === 0) {
         console.log('[TSN MANAGER BG] 🔴 No live tabs found to end.');
-        try {
-          chrome.notifications.create('mra_found_notify', {
-            type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-            title: '⚠️ ТСН — Не знайдено ефірів',
-            message: 'Таймер зупинки спрацював, але трансляцій НАЖИВО немає.'
-          });
-        } catch (e) { }
+        await notify('mra_found_notify', {
+          type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+          title: '⚠️ ТСН — Не знайдено ефірів',
+          message: 'Таймер зупинки спрацював, але трансляцій НАЖИВО немає.'
+        }, 'notif-errors');
         return;
       }
 
@@ -382,7 +431,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await new Promise(r => setTimeout(r, 1000));
 
         const endPromise = new Promise((resolve) => {
-          const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 20000);
+          // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
+          const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
           const listener = (req) => {
             if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
           };
@@ -393,28 +443,30 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           if (chrome.runtime.lastError) console.warn('[TSN MANAGER BG] Failed to send end_stream:', chrome.runtime.lastError.message);
         });
 
-        await endPromise;
+        const endOk = await endPromise;
         plan.steps[i].duration = Math.round((Date.now() - stepStart) / 1000);
-        plan.steps[i].status = 'done';
+        plan.steps[i].status = endOk ? 'done' : 'failed';
         await broadcastPlan(plan);
 
-        try {
-          chrome.notifications.create('mra_step_' + Date.now(), {
-            type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-            title: `⏹ Крок ${i+1}/${plan.steps.length}`,
-            message: `«${plan.steps[i].title}» — ЗАВЕРШЕНО!`
-          });
-        } catch (e) { }
+        await notify('mra_step_' + Date.now(), {
+          type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+          title: endOk ? `⏹ Крок ${i+1}/${plan.steps.length}` : `❌ Крок ${i+1}/${plan.steps.length}`,
+          message: endOk
+            ? `«${plan.steps[i].title}» — ЗАВЕРШЕНО!`
+            : `«${plan.steps[i].title}» — завершення НЕ підтверджено! Перевірте вкладку.`
+        }, 'notif-steps');
       }
 
       await broadcastPlan(plan);
-      try {
-        chrome.notifications.create('mra_done_notify', {
-          type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: '⏹ ТСН — Всі трансляції зупинено',
-          message: `Завершено ${liveTabs.length} трансляці${liveTabs.length === 1 ? 'ю' : 'й'} за планом.`
-        });
-      } catch (e) { }
+      const endedCount = plan.steps.filter(s => s.status === 'done').length;
+      const endFailed = plan.steps.length - endedCount;
+      await notify('mra_done_notify', {
+        type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: endFailed === 0 ? '⏹ ТСН — Всі трансляції зупинено' : '⚠️ ТСН — Зупинено не всі трансляції',
+        message: endFailed === 0
+          ? `Завершено ${endedCount} трансляці${endedCount === 1 ? 'ю' : 'й'} за планом.`
+          : `Завершено: ${endedCount} з ${plan.steps.length}. Перевірте вкладки з ❌!`
+      }, 'notif-plan-done');
       return;
     }
 
@@ -428,14 +480,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
     await broadcastPlan(plan);
 
-    try {
-      chrome.notifications.create('mra_found_notify', {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: `🚀 ПЛАН ДІЙ: запустити ${plan.steps.length} ефірів`,
-        message: 'Починаємо почерговий запуск о ' + (data.scheduledTime || '') + '...'
-      });
-    } catch (e) { }
+    await notify('mra_found_notify', {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: `🚀 ПЛАН ДІЙ: запустити ${plan.steps.length} ефірів`,
+      message: 'Починаємо почерговий запуск о ' + (data.scheduledTime || '') + '...'
+    }, 'notif-plan');
 
     if (livestreamTabs[0]) {
       await chrome.windows.update(livestreamTabs[0].windowId, { focused: true });
@@ -486,14 +536,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       }
       await broadcastPlan(plan);
 
-      try {
-        const ok = result === 'mra_live_verified';
-        chrome.notifications.create('mra_step_' + Date.now(), {
-          type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: ok ? `✅ Крок ${i+1}/${plan.steps.length}` : `❌ Крок ${i+1}/${plan.steps.length}`,
-          message: ok ? `«${plan.steps[i].title}» — НАЖИВО!` : `«${plan.steps[i].title}» — не вдалося`
-        });
-      } catch (e) {}
+      const ok = result === 'mra_live_verified';
+      await notify('mra_step_' + Date.now(), {
+        type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: ok ? `✅ Крок ${i+1}/${plan.steps.length}` : `❌ Крок ${i+1}/${plan.steps.length}`,
+        message: ok ? `«${plan.steps[i].title}» — НАЖИВО!` : `«${plan.steps[i].title}» — не вдалося`
+      }, 'notif-steps');
 
       if (i < livestreamTabs.length - 1) {
         plan.detail = '⏳ Cooldown 8с...';
@@ -504,19 +552,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
 
     await broadcastPlan(plan);
-    try {
-      const allOk = failed === 0;
-      chrome.notifications.create('mra_done_notify', {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: allOk
-          ? '✅ ТСН — План виконано!'
-          : `⚠️ ТСН — Запущено: ${launched} з ${plan.steps.length}`,
-        message: allOk
-          ? `${launched} трансляцій успішно запущено 🔴`
-          : `Успішно: ${launched} | Помилка: ${failed}`
-      });
-    } catch (e) { }
+    const allOk = failed === 0;
+    await notify('mra_done_notify', {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: allOk
+        ? '✅ ТСН — План виконано!'
+        : `⚠️ ТСН — Запущено: ${launched} з ${plan.steps.length}`,
+      message: allOk
+        ? `${launched} трансляцій успішно запущено 🔴`
+        : `Успішно: ${launched} | Помилка: ${failed}`
+    }, 'notif-plan-done');
 
     return;
   }
@@ -582,26 +628,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (resolvedAction === 'end' && !realIsLive) {
     console.warn('[TSN MANAGER BG] ⚠️ actionType=end, але стрім НЕ живий! Перемикаємось на ЗАПУСК.');
     resolvedAction = 'launch';
-    try {
-      chrome.notifications.create('mra_smart_switch_' + Date.now(), {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '🧠 ТСН — Розумне перемикання',
-        message: 'Таймер був "Зупинка", але трансляція не в ефірі — запускаю!'
-      });
-    } catch (e) { }
+    await notify('mra_smart_switch_' + Date.now(), {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '🧠 ТСН — Розумне перемикання',
+      message: 'Таймер був "Зупинка", але трансляція не в ефірі — запускаю!'
+    }, 'notif-smart');
   } else if (resolvedAction === 'launch' && realIsLive) {
     console.warn('[TSN MANAGER BG] ⚠️ actionType=launch, але стрім вже НАЖИВО! Нічого не робимо.');
     await chrome.storage.local.set({ scheduleEnabled: false, pendingLaunch: false });
     chrome.action.setBadgeText({ text: '' });
-    try {
-      chrome.notifications.create('mra_already_live_' + Date.now(), {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '✅ ТСН — Вже в ефірі',
-        message: 'Трансляція вже НАЖИВО — нічого не запускаємо.'
-      });
-    } catch (e) { }
+    await notify('mra_already_live_' + Date.now(), {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '✅ ТСН — Вже в ефірі',
+      message: 'Трансляція вже НАЖИВО — нічого не запускаємо.'
+    }, 'notif-smart');
     return;
   }
 
@@ -612,14 +654,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     if (!livestreamTab) {
       console.log('[TSN MANAGER BG] 🔴 End mode fired, but no active livestream tab found.');
-      try {
-        chrome.notifications.create('mra_found_notify', {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: '⚠️ ТСН — Не знайдено ефірів',
-          message: 'Таймер зупинки спрацював, але відкритої сторінки трансляції немає.'
-        });
-      } catch (e) { }
+      await notify('mra_found_notify', {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: '⚠️ ТСН — Не знайдено ефірів',
+        message: 'Таймер зупинки спрацював, але відкритої сторінки трансляції немає.'
+      }, 'notif-errors');
       return;
     }
 
@@ -630,14 +670,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError.message);
     });
 
-    try {
-      chrome.notifications.create('mra_done_notify', {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '⏹ ТСН — Зупиняємо ефір',
-        message: 'Команду на зупинку трансляції успішно надіслано.'
-      });
-    } catch (e) { }
+    await notify('mra_done_notify', {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '⏹ ТСН — Зупиняємо ефір',
+      message: 'Команду на зупинку трансляції успішно надіслано.'
+    }, 'notif-command-sent');
     return;
   }
 
@@ -671,19 +709,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 
   // Системне сповіщення #1: знайдено і запускаємо
-  try {
-    const foundCount = livestreamTab ? 1 : 0;
-    const foundMsg = foundCount > 0
-      ? `Знайдено 1 трансляцію, запускаємо о ${data.scheduledTime || ''}...`
-      : `Відкриваємо YouTube Studio о ${data.scheduledTime || ''}...`;
+  const foundCount = livestreamTab ? 1 : 0;
+  const foundMsg = foundCount > 0
+    ? `Знайдено 1 трансляцію, запускаємо о ${data.scheduledTime || ''}...`
+    : `Відкриваємо YouTube Studio о ${data.scheduledTime || ''}...`;
 
-    chrome.notifications.create('mra_launch_notify', {
-      type: 'basic',
-      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-      title: '🔍 ТСН — Знайдено: ' + (foundCount > 0 ? '1 трансляцію' : 'немає вкладок'),
-      message: foundMsg
-    });
-  } catch (e) { /* notifications не критичні */ }
+  await notify('mra_launch_notify', {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    title: '🔍 ТСН — Знайдено: ' + (foundCount > 0 ? '1 трансляцію' : 'немає вкладок'),
+    message: foundMsg
+  }, 'notif-command-sent');
 
   // Вимикаємо розклад (одноразовий)
   await chrome.storage.local.set({ scheduleEnabled: false });
@@ -696,14 +732,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   function sendLaunchWithRetry(attemptsLeft, delayMs) {
     if (attemptsLeft <= 0) {
       console.warn('[TSN MANAGER BG] All retry attempts exhausted, content script did not respond.');
-      try {
-        chrome.notifications.create('mra_done_notify', {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: '⚠️ ТСН — Не вдалось запустити ефір',
-          message: 'Скрипт не відповів після 5 спроб. Перевірте вкладку YouTube Studio.'
-        });
-      } catch (e) { }
+      notify('mra_done_notify', {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: '⚠️ ТСН — Не вдалось запустити ефір',
+        message: 'Скрипт не відповів після 5 спроб. Перевірте вкладку YouTube Studio.'
+      }, 'notif-errors');
       return;
     }
 
@@ -716,14 +750,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         return;
       }
       console.log('[TSN MANAGER BG] ✅ Launch message delivered');
-      try {
-        chrome.notifications.create('mra_done_notify', {
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-          title: '✅ ТСН — Команду надіслано!',
-          message: 'Бот запускає трансляцію 🔴'
-        });
-      } catch (e) { }
+      notify('mra_done_notify', {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: '✅ ТСН — Команду надіслано!',
+        message: 'Бот запускає трансляцію 🔴'
+      }, 'notif-command-sent');
     });
   }
 
@@ -755,48 +787,182 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
+// ── Telegram-звіти ──
+function tgEscape(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function fmtDur(sec) {
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const mm = String(m).padStart(2, '0');
+  const sss = String(ss).padStart(2, '0');
+  if (h > 0) return `${h} год ${mm} хв ${sss} с`;
+  return `${mm} хв ${sss} с`;
+}
+
+function fmtTc(sec) {
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}
+
+async function tgApi(token, method, payload) {
+  const url = `https://api.telegram.org/bot${token}/${method}`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (e) {
+    // Не логуємо токен
+    throw new Error('Telegram API fetch error: ' + e.message);
+  }
+}
+
+function buildTgReport(report) {
+  const { videoTitle, videoId, videoDurationSec, totalPlanned, ok, fail, events } = report;
+
+  const durStr = videoDurationSec > 0 ? fmtDur(videoDurationSec) : 'невідомо';
+  const studioUrl = videoId ? `https://studio.youtube.com/video/${videoId}/edit` : '';
+
+  // ── КРИТИЧНИЙ КЕЙС: «встик» — жодного місця для реклами ──
+  if (report.kind === 'no_spots') {
+    const an = report.analysis || {};
+    let lines = [];
+    lines.push(`🔴 <b>ТСН Менеджер — КРИТИЧНО: МІТКИ НЕ ПОСТАВЛЕНО</b>`);
+    lines.push('');
+    lines.push(`📹 Відео: «${tgEscape(videoTitle)}»`);
+    lines.push(`⏱ Хронометраж: ${durStr}`);
+    if (studioUrl) lines.push(`🔗 <a href="${studioUrl}">Відкрити редактор</a>`);
+    lines.push('');
+    lines.push(`🎬 <b>Відео змонтоване ВСТИК</b> — бот не знайшов жодного придатного місця для реклами.`);
+    if (an.idealAds) {
+      const escalatedNote = an.escalated
+        ? ` навіть з максимальною чутливістю (поріг ${an.finalThr}%, мін. тиша ${an.finalMinS}с)`
+        : '';
+      lines.push(`За хронометражем тут мало бути ${an.idealAds} міток. Бот шукав паузи${escalatedNote} — сирих тихих ділянок знайдено: ${an.pausesFound}, придатних: 0.`);
+    }
+    lines.push('');
+    lines.push(`⚠️ <b>Наслідок:</b> у цьому відео РЕКЛАМИ НЕ БУДЕ, доки мітки не поставлять вручну.`);
+    lines.push('');
+    lines.push(`👉 <b>Що робити:</b>`);
+    lines.push(`1. Відкрити редактор за посиланням і спробувати поставити мітки вручну.`);
+    lines.push(`2. Якщо пауз справді нема — повернути відео монтажерам, щоб додали природні паузи (~кожні 2 хвилини).`);
+    const text = lines.join('\n');
+    if (text.length > 4000) return text.substring(0, 3997) + '…';
+    return text;
+  }
+
+  // ── Звичайний звіт про вставку ──
+  const allProblems = (events || []).filter(ev => ev.type !== 'yt_flag_moved');
+  const movedOk = (events || []).filter(ev => ev.type === 'yt_flag_moved');
+  // insert_failed вже є в allProblems (кожен fail++ пушить подію) — fail окремо не додаємо
+  const problemCount = Math.max(allProblems.length, fail);
+
+  let lines = [];
+  lines.push(`🚨 <b>ТСН Менеджер — проблеми з мітками реклами</b>`);
+  lines.push('');
+  lines.push(`📹 Відео: «${tgEscape(videoTitle)}»`);
+  lines.push(`⏱ Хронометраж: ${durStr}`);
+  if (studioUrl) lines.push(`🔗 <a href="${studioUrl}">Відкрити редактор</a>`);
+  lines.push('');
+  lines.push(`📊 <b>Підсумок:</b> мали вставити ${totalPlanned} міток, успішно ${ok}, з проблемами ${problemCount}`);
+
+  // Попередження про монтаж встик (якщо менше 30% природних пауз)
+  const an = report.analysis || {};
+  if (an.idealAds > 0 && (an.realPauses || 0) / an.idealAds < 0.3) {
+    const zeroNote = (an.realPauses || 0) === 0 ? ' (ЖОДНОЇ)' : '';
+    lines.push('');
+    lines.push(`🎬 <b>Увага — монтаж встик:</b> з потрібних ${an.idealAds} міток природних пауз лише ${an.realPauses || 0}${zeroNote}. Решта (${an.backupCount || 0}) поставлені у «найтихіших місцях» — YouTube може рідше показувати там рекламу або бракувати ці мітки.`);
+  }
+
+  lines.push('');
+  lines.push(`<i>Що пішло не так:</i>`);
+
+  // Всі події: спочатку проблемні, потім переміщені (довідково)
+  const allEvents = [...allProblems, ...movedOk];
+  const showEvents = allEvents.slice(0, 15);
+  const hiddenCount = allEvents.length - showEvents.length;
+
+  showEvents.forEach((ev, i) => {
+    const num = i + 1;
+    if (ev.type === 'insert_failed') {
+      lines.push(`${num}. ❌ ${tgEscape(ev.plannedTc)} — мітку НЕ ВСТАВЛЕНО (технічний збій). Як мало бути: рекламна пауза на ${tgEscape(ev.plannedTc)}${ev.quality ? ` (якість паузи: ${tgEscape(ev.quality)})` : ''}. Цю мітку треба поставити вручну.${ev.error ? ` <i>Причина для розробника: ${tgEscape(String(ev.error).substring(0, 120))}</i>` : ''}`);
+    } else if (ev.type === 'time_mismatch') {
+      lines.push(`${num}. ⚠️ ${tgEscape(ev.plannedTc)} — мітка стала на НЕПРАВИЛЬНИЙ час ${tgEscape(ev.actualTc)}. Як мало бути: ${tgEscape(ev.plannedTc)}. Перевірте і пересуньте вручну.`);
+    } else if (ev.type === 'yt_flag_stuck') {
+      lines.push(`${num}. 🟡 ${tgEscape(ev.atTc)} — YouTube попереджає, що реклама в цьому місці може НЕ ПОКАЗУВАТИСЬ (немає природної паузи поруч). Бот 3 рази спробував пересунути — не вийшло. Перегляньте це місце.`);
+    } else if (ev.type === 'yt_flag_removed') {
+      lines.push(`${num}. 🗑 ${tgEscape(ev.atTc)} — YouTube не прийняв це місце, мітку ВИДАЛЕНО. В цій частині відео реклами не буде, якщо не поставити вручну.`);
+    } else if (ev.type === 'yt_flag_moved') {
+      lines.push(`${num}. ✅ ${tgEscape(ev.fromTc)} → ${tgEscape(ev.toTc)} — YouTube забракував місце, але бот сам пересунув мітку на сусідню паузу. Виправлено автоматично.`);
+    }
+  });
+
+  if (hiddenCount > 0) {
+    lines.push(`…та ще ${hiddenCount} проблем`);
+  }
+
+  lines.push('');
+  lines.push(`👉 <b>Що робити:</b> відкрити редактор за посиланням вище і перевірити мітки зі значками ❌/⚠️/🟡/🗑.`);
+
+  const text = lines.join('\n');
+  // Telegram ліміт 4096 символів
+  if (text.length > 4000) return text.substring(0, 3997) + '…';
+  return text;
+}
+
+async function pushTgHistory(entry) {
+  try {
+    const data = await chrome.storage.local.get('tgHistory');
+    const history = Array.isArray(data.tgHistory) ? data.tgHistory : [];
+    history.unshift(entry);
+    if (history.length > 50) history.length = 50;
+    await chrome.storage.local.set({ tgHistory: history });
+  } catch (e) { /* не критично */ }
+}
+
 // ── Повідомлення від popup.js та content scripts ──
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // ── Верифікація: ефір успішно запустився ──
   if (request.action === 'mra_live_verified') {
     console.log('[TSN MANAGER BG] ✅ Live verified:', request.title);
-    try {
-      chrome.notifications.create('mra_live_ok_' + Date.now(), {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '✅ ТСН — Ефір НАЖИВО!',
-        message: `"${request.title || 'Трансляція'}" успішно запущена 🔴`
-      });
-    } catch (e) { }
+    notify('mra_live_ok_' + Date.now(), {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '✅ ТСН — Ефір НАЖИВО!',
+      message: `"${request.title || 'Трансляція'}" успішно запущена 🔴`
+    }, 'notif-stream-live');
     return;
   }
 
   // ── Верифікація: ефір успішно завершився ──
   if (request.action === 'mra_stream_ended') {
     console.log('[TSN MANAGER BG] ⏹ Stream ended verified:', request.title);
-    try {
-      chrome.notifications.create('mra_end_ok_' + Date.now(), {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '✅ ТСН — Ефір ЗАВЕРШЕНО!',
-        message: `"${request.title || 'Трансляція'}" успішно зупинена ⏹`
-      });
-    } catch (e) { }
+    notify('mra_end_ok_' + Date.now(), {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '✅ ТСН — Ефір ЗАВЕРШЕНО!',
+      message: `"${request.title || 'Трансляція'}" успішно зупинена ⏹`
+    }, 'notif-stream-ended');
     return;
   }
 
   // ── Тривога: ефір НЕ запустився після 60с ──
   if (request.action === 'mra_live_check_failed') {
     console.error('[TSN MANAGER BG] 🚨 Live check FAILED:', request.title);
-    try {
-      chrome.notifications.create('mra_live_fail_' + Date.now(), {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '🚨 ТСН — ЕФІР НЕ ЗАПУСТИВСЯ!',
-        message: `"${request.title || 'Трансляція'}" — перевірте ключ трансляції у Studio!`
-      });
-    } catch (e) { }
+    notify('mra_live_fail_' + Date.now(), {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '🚨 ТСН — ЕФІР НЕ ЗАПУСТИВСЯ!',
+      message: `"${request.title || 'Трансляція'}" — перевірте ключ трансляції у Studio!`
+    }, 'notif-errors');
     return;
   }
 
@@ -849,5 +1015,108 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     });
     return true;
+  }
+
+  // ── Telegram: надіслати звіт про проблемні мітки ──
+  if (request.action === 'mra_tg_report') {
+    (async () => {
+      const { tgSettings } = await chrome.storage.local.get('tgSettings');
+      const s = tgSettings || {};
+      const entry = {
+        ts: request.report.ts,
+        videoTitle: request.report.videoTitle,
+        videoId: request.report.videoId,
+        ok: request.report.ok,
+        fail: request.report.fail,
+        kind: request.report.kind || 'insert',
+        problems: request.report.kind === 'no_spots'
+          ? ((request.report.analysis && request.report.analysis.idealAds) || 1)
+          : (request.report.events || []).filter(ev => ev.type !== 'yt_flag_moved').length,
+        sent: false,
+        error: ''
+      };
+
+      console.log('[TSN MANAGER BG] 📨 Telegram report received:', {
+        title: request.report.videoTitle,
+        kind: request.report.kind,
+        enabled: s.enabled,
+        hasToken: !!s.token,
+        hasChatId: !!s.chatId
+      });
+
+      if (s.enabled && s.token && s.chatId) {
+        try {
+          console.log('[TSN MANAGER BG] 📤 Sending Telegram message...');
+          const res = await tgApi(s.token, 'sendMessage', {
+            chat_id: s.chatId,
+            text: buildTgReport(request.report),
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+          });
+          entry.sent = !!(res && res.ok);
+          if (!entry.sent) entry.error = (res && res.description) || 'невідома помилка';
+          console.log('[TSN MANAGER BG] 📬 Telegram response:', { sent: entry.sent, error: entry.error });
+        } catch (e) {
+          entry.error = String(e.message || e);
+          console.error('[TSN MANAGER BG] ❌ Telegram API error:', entry.error);
+        }
+      } else {
+        const reason = !s.enabled ? 'disabled' : (!s.token ? 'no token' : 'no chatId');
+        entry.error = `Telegram ${reason}`;
+        console.warn('[TSN MANAGER BG] ⚠️ Telegram не налаштовано:', reason);
+      }
+      await pushTgHistory(entry);
+      sendResponse({ ok: entry.sent, error: entry.error });
+    })();
+    return true; // async
+  }
+
+  // ── Telegram: тестове повідомлення ──
+  if (request.action === 'mra_tg_test') {
+    (async () => {
+      try {
+        const res = await tgApi(request.token, 'sendMessage', {
+          chat_id: request.chatId,
+          text: '✅ ТСН Менеджер підключено!\nЗвіти про проблемні мітки реклами надходитимуть у цей чат.',
+          parse_mode: 'HTML'
+        });
+        if (res && res.ok) {
+          sendResponse({ ok: true, error: '' });
+        } else {
+          sendResponse({ ok: false, error: (res && res.description) || 'невідома помилка' });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e.message || e) });
+      }
+    })();
+    return true; // async
+  }
+
+  // ── Telegram: визначити Chat ID з оновлень бота ──
+  if (request.action === 'mra_tg_detect_chat') {
+    (async () => {
+      try {
+        const res = await tgApi(request.token, 'getUpdates', { limit: 50 });
+        if (!res || !res.ok) {
+          sendResponse({ ok: false, error: (res && res.description) || 'Помилка getUpdates' });
+          return;
+        }
+        const seen = new Map();
+        for (const upd of (res.result || [])) {
+          const chat = (upd.message && upd.message.chat) || (upd.my_chat_member && upd.my_chat_member.chat);
+          if (chat && chat.id && !seen.has(chat.id)) {
+            seen.set(chat.id, {
+              id: chat.id,
+              title: chat.title || chat.first_name || String(chat.id),
+              type: chat.type || 'unknown'
+            });
+          }
+        }
+        sendResponse({ ok: true, chats: Array.from(seen.values()) });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e.message || e) });
+      }
+    })();
+    return true; // async
   }
 });

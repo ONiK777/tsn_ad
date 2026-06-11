@@ -172,12 +172,14 @@
     if (attemptsLeft <= 0) {
       showOverlay('⚠️ Відкрито стрім — натисніть Go Live вручну', 'warn');
       window.mraLaunchInProgress = false;
+      window.mraGoLiveSequenceStarted = false;
       return;
     }
 
     if (isStreamLive()) {
       console.log('[TSN MANAGER] Stream is ALREADY LIVE! No need to click Go Live.');
       showOverlay('✅ Трансляція вже НАЖИВО!', 'success');
+      window.mraGoLiveSequenceStarted = false;
       verifyLiveStatus(); // Відправить mra_live_verified майже одразу
       return;
     }
@@ -199,6 +201,13 @@
     console.log('[TSN MANAGER] 🔴 FOUND GO LIVE BUTTON:', btn.outerHTML.substring(0, 150));
     showOverlay('🔴 Кнопку Go Live знайдено! Зачекайте 3с...', 'info');
 
+    // Захист від паралельних кліків
+    if (window.mraGoLiveSequenceStarted) {
+      console.log('[TSN MANAGER] Sequence already started, skipping duplicate.');
+      return;
+    }
+    window.mraGoLiveSequenceStarted = true;
+
     // Чекаємо 3с щоб YouTube Studio встиг завантажити внутрішні модулі (RequestBuilder)
     setTimeout(() => {
       const freshBtn = findGoLiveButton();
@@ -213,28 +222,8 @@
       setTimeout(handleConfirmDialog, 1000);
       setTimeout(handleConfirmDialog, 2000);
 
-      // ── Швидкий retry-цикл (обхід помилки No RequestBuilder) ──
-      // Якщо кнопка ще на місці через 2.5с — клік не спрацював, натискаємо знову
-      let quickRetries = 0;
-      function quickRetryClick() {
-        if (quickRetries >= 4) return;  // макс 4 швидких спроби
-        const retryBtn = findGoLiveButton();
-        if (retryBtn && !retryBtn.disabled) {
-          quickRetries++;
-          console.warn(`[TSN MANAGER] ⚡ Quick retry #${quickRetries}: кнопка ще на місці, натискаю знову...`);
-          showOverlay(`⚠️ YouTube не відповів — повторний клік #${quickRetries + 1}. Зачекайте!`, 'warn');
-          window.mraIsStartConfirmed = false;
-          retryBtn.click();
-          setTimeout(handleConfirmDialog, 1000);
-          setTimeout(handleConfirmDialog, 2000);
-          setTimeout(quickRetryClick, 2500);
-        }
-        // Якщо кнопка зникла — клік спрацював, retry не потрібний
-      }
-      setTimeout(quickRetryClick, 2500);
-
-      // Контрольна перевірка статусу НАЖИВО (страховка)
-      setTimeout(() => verifyLiveStatus(), 5000);
+      // Викликаємо єдину перевірку статусу (вона сама зробить retry якщо треба)
+      setTimeout(() => verifyLiveStatus(), 3000);
     }, 3000);
   }
 
@@ -537,6 +526,7 @@
         console.log('[TSN MANAGER] ✅ Stream is LIVE:', title);
         showOverlay(`✅ Трансляцію запущено! 🔴 «${title}»`, 'success');
         window.mraLaunchInProgress = false;
+        window.mraGoLiveSequenceStarted = false;
         chrome.runtime.sendMessage({
           action: 'mra_live_verified',
           title,
@@ -549,23 +539,18 @@
       console.log(`[TSN MANAGER] Not live yet: "${title}" (${Math.round(elapsed / 1000)}s)`);
 
       // ── АВТОМАТИЧНИЙ RETRY КЛІКУ (Броня від помилки No RequestBuilder) ──
-      // До 3 повторних спроб з наростаючою затримкою: 6с, 15с, 25с
-      const retryThresholds = [6000, 15000, 25000];
+      // Робимо швидкі спроби: кожні 4-5 секунд, до 4 разів
+      const retryThresholds = [4000, 9000, 14000, 20000];
       if (retryCount < retryThresholds.length && elapsed > retryThresholds[retryCount]) {
         const btn = findGoLiveButton();
         if (btn && !btn.disabled) {
           retryCount++;
-          console.warn(`[TSN MANAGER] ⚠️ Retry #${retryCount}/3: Button still present after ${Math.round(elapsed/1000)}s. Re-clicking...`);
-          showOverlay(`⚠️ YouTube помилка — спроба #${retryCount}/3. Зачекайте, бот працює!`, 'warn');
+          console.warn(`[TSN MANAGER] ⚡ Повторний клік #${retryCount}: кнопка ще на місці...`);
+          showOverlay(`⚠️ YouTube не відповів — повторний клік #${retryCount}. Зачекайте!`, 'warn');
           window.mraIsStartConfirmed = false;
-          setTimeout(() => {
-            const freshBtn = findGoLiveButton();
-            if (freshBtn && !freshBtn.disabled) {
-              freshBtn.click();
-              setTimeout(handleConfirmDialog, 1500);
-              setTimeout(handleConfirmDialog, 3000);
-            }
-          }, 3000);
+          btn.click();
+          setTimeout(handleConfirmDialog, 1000);
+          setTimeout(handleConfirmDialog, 2500);
         }
       }
 
@@ -583,6 +568,7 @@
 
         showOverlay(failReason, 'error');
         window.mraLaunchInProgress = false;
+        window.mraGoLiveSequenceStarted = false;
         chrome.runtime.sendMessage({
           action: 'mra_live_check_failed',
           title,

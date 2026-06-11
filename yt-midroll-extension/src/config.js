@@ -1,6 +1,11 @@
 var CONFIG = {
   autoOpenPanel: true,
   autoGap: true,
+  guaranteeStandard: true, // Без пропусків: якщо у вікні немає справжньої паузи — ставимо запасну мітку в найтихішому місці
+  rhythmFlexPct: 50,   // Гнучкість ритму: ±% від інтервалу при пошуку паузи (ручний режим)
+  minQualityPct: 0,    // Мінімальна якість паузи, % (ручний режим; 0 = будь-яка тиша)
+  startOffsetSec: 10,  // Не ставити рекламу в перші N секунд
+  endOffsetSec: 15,    // Не ставити рекламу в останні N секунд
   minGapSec: 120,
   shortVideoCutoff: 600,
   longVideoGapSec: 120,
@@ -8,19 +13,30 @@ var CONFIG = {
   minSilenceSec: 1.5,
   silenceThresholdPct: 15,
   focusStart: true,
+  autoSaveAfterInsert: true, // Автоматично натискати "Продовжити" та "Зберегти" після вставки міток
+  fullAutoInsert: false, // Нуль кліків: відкрив редактор без міток → бот сам аналізує, вставляє і зберігає
 };
 
 // ─── СТАН ────────────────────────────────────────────────────────────────────
 var state = {
   silences: [],
   selected: [],
+  analysisMeta: null, // Підсумок авто-пілота: ціль, ритм, ескалація чутливості, діагноз відео
+  autoRunUrl: null, // URL вейвформи, для якого вже виконувалась авто-вставка (захист від повторів)
   waveformUrl: null,
   waveformData: null,
+  waveformZoom: 1,
+  waveformOffsetSec: 0,
+  waveformManualHints: true,
   cachedAudioBuffer: null,
   cachedAudioUrl: null,
-  analyzing: false,       // Захист від одночасного запуску
-  inserting: false,       // Захист від подвійного запуску вставки
-  insertAbort: false,     // Для зупинки вставки
+  analyzing: false, // Захист від одночасного запуску
+  inserting: false, // Захист від подвійного запуску вставки
+  insertAbort: false, // Для зупинки вставки
+  interceptedDuration: null, // Тривалість з videoplayback URL (фолбек)
+  ytAdHintsRaw: null, // Перехоплені підказки YouTube про природні паузи: {times: [...], url}
+  ytHintsSec: null,   // Ті ж підказки, нормовані в секунди (після аналізу)
+  tgEvents: [],       // Буфер подій для Telegram-звіту (заповнюється під час вставки)
 };
 
 var isPanelClosedByUser = false;

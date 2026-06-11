@@ -1,0 +1,48 @@
+Created At: 2026-06-09T16:08:04Z
+Completed At: 2026-06-09T16:08:04Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 820
+Total Bytes: 44049
+Showing lines 261 to 300
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+261:     <canvas id="mra-waveform" width="282" height="104" title="Клік по жовтій вертикалі = додати/видалити мітку"></canvas>
+262:     <div class="mra-wave-toolbar" id="mra-wave-zoom">
+263:       <div class="mra-wave-zoom-group">
+264:         <button class="mra-wave-btn" id="mra-wave-zoom-out" title="Віддалити">−</button>
+265:         <button class="mra-wave-btn" id="mra-wave-zoom-reset" title="Скинути масштаб">100%</button>
+266:         <button class="mra-wave-btn" id="mra-wave-zoom-in" title="Наблизити">+</button>
+267:       </div>
+268:       <input id="mra-wave-pan" type="range" min="0" max="100" step="0.01" value="0" title="Позиція у збільшеній вейвформі">
+269:     </div>
+270:     <label class="mra-wave-hints-toggle" id="mra-wave-hints-wrap" title="Показувати жовті вертикалі, де ще можна вручну поставити рекламу">
+271:       <input id="mra-wave-hints" type="checkbox" checked>
+272:       <span class="mra-wave-switch"></span>
+273:       <span class="mra-wave-hints-copy">Підказувати, куди можна поставити</span>
+274:       <span class="mra-wave-state" id="mra-wave-hints-label">так</span>
+275:     </label>
+276:     <div class="mra-wave-legend">
+277:       <span class="mra-wave-chip"><span class="mra-wave-swatch"></span>авто</span>
+278:       <span class="mra-wave-chip"><span class="mra-wave-swatch manual"></span>вручну</span>
+279:       <span class="mra-wave-chip"><span class="mra-wave-swatch sound"></span>звук</span>
+280:       <span class="mra-wave-chip"><span class="mra-wave-swatch hint"></span>можна вручну</span>
+281:     </div>
+282:   </div>
+283:   <button id="mra-clear">🗑️ Очистити всі мітки на відео</button>
+284:   <div id="mra-progress-label"></div>
+285:   <div id="mra-progress-wrap"><div id="mra-progress-bar"></div></div>
+286:   <div id="mra-status">Готовий до роботи</div>
+287: </div>
+288:   `;
+289: 
+290:   document.body.appendChild(panel);
+291: 
+292:   // ── Відновлюємо розміри панелі ──
+293:   safeChromeStorageGet(['mraPanelWidth', 'mraPanelHeight'], (data) => {
+294:     if (data.mraPanelWidth) panel.style.width = data.mraPanelWidth;
+295:     if (data.mraPanelHeight) panel.style.height = data.mraPanelHeight;
+296:   });
+297: 
+298:   // ── Зберігаємо розміри панелі при розтягуванні ──
+299:   let resizeTimer;
+300:   new ResizeObserver(() => {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

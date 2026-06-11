@@ -1,0 +1,55 @@
+Created At: 2026-06-09T16:08:02Z
+Completed At: 2026-06-09T16:08:02Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 820
+Total Bytes: 44049
+Showing lines 210 to 260
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+210:       рџ«  РђРІС‚Рѕ-СЂРµР¶РёРј
+211:       <div style="margin-top:4px;font-weight:400;opacity:0.8;">СЃС‚Р°РІРёРјРѕ СЂРµРєР»Р°РјСѓ СЃРєС–Р»СЊРєРё РјРѕР¶РЅР° С‡РµСЂРµР· 1.5-2 С…РІ</div>
+212:     </div>
+213:     <div style="margin-top:8px;">
+214:       <div class="mtw">
+215:         <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
+216:         <label class="mtl" for="mra-focus-start" style="color:#ffffff;opacity:0.85;font-weight:500;">рџЋЇ Р‘С–Р»СЊС€Рµ СЂРµРєР»Р°РјРё РЅР° РїРѕС‡Р°С‚РєСѓ (x2 Р±СѓСЃС‚)</label>
+217:       </div>
+218:       <div class="mtw" style="margin-top:6px;">
+219:         <label class="mt"><input type="checkbox" id="mra-auto-open" checked><span class="msl"></span></label>
+220:         <label class="mtl" for="mra-auto-open">рџ”„ РђРІС‚РѕРјР°С‚РёС‡РЅРѕ РІС–РґРєСЂРёРІР°С‚Рё РїР°РЅРµР»СЊ</label>
+221:       </div>
+222:       <div class="mtw" style="margin-top:6px;">
+223:         <label class="mt"><input type="checkbox" id="mra-autosave" checked><span class="msl"></span></label>
+224:         <label class="mtl" for="mra-autosave">рџ’ѕ РђРІС‚РѕР·Р±РµСЂРµР¶РµРЅРЅСЏ (РџСЂРѕРґРѕРІР¶РёС‚Рё + Р—Р±РµСЂРµРіС‚Рё)</label>
+225:       </div>
+226:     </div>
+227:   </div>
+228: 
+229:   <div class="ms">
+230:     <div class="mst">рџ”‡ Р”Рµ СЃС‚Р°РІРёС‚Рё СЂРµРєР»Р°РјСѓ</div>
+231:     ${row('РњС–РЅ. РїР°СѓР·Р° РґР»СЏ СЂРµРєР»Р°РјРё (СЃ):', stepper('mra-min-silence', 1.5, 0.1, 30, 0.1), 'Р‘РћРў РЎРўРђР’РРўР¬ Р Р•РљР›РђРњРЈ Р›РРЁР• РўРђРњ, Р”Р• Р„ РџРђРЈР—Рђ Р”РћР’РЁРђ Р—Рђ N РЎР•РљРЈРќР”!\nРњС–СЃ
+<truncated 625 bytes>
+n></label>
+239:       <label class="mtl" for="mra-auto-gap" title="Р‘РѕС‚ СЃР°Рј РїС–РґР±РёСЂР°С” С‡Р°СЃС‚РѕС‚Сѓ СЂРµРєР»Р°РјРё Р·Р°Р»РµР¶РЅРѕ РІС–Рґ РґРѕРІР¶РёРЅРё РІС–РґРµРѕ">рџ¤– РђРІС‚Рѕ (Р±РѕС‚ РІРёСЂС–С€СѓС” СЃР°Рј)</label>
+240:     </div>
+241:     <div id="mra-auto-sect">
+242:       ${row('РљРѕСЂРѕС‚РєС– РІС–РґРµРѕ вЂ” РґРѕ (С…РІ):', stepper('mra-cutoff', 10, 1, 120, 1), 'Р’С–РґРµРѕ РєРѕСЂРѕС‚С€Рµ СЌС‚РѕРіРѕ = "РєРѕСЂРѕС‚РєРµ". РќР°РїСЂРёРєР»Р°Рґ: 10 С…РІ в†’ РІС–РґРµРѕ РґРѕ 10 С…РІ РІРІР°Р¶Р°СЋС‚СЊСЃСЏ РєРѕСЂРѕС‚РєРёРјРё')}
+243:       ${row('Р РµРєР»Р°РјР° РєРѕР¶РЅС– (СЃ) вЂ” РєРѕСЂРѕС‚РєС–:', stepper('mra-short-gap', 60, 1, 600, 1), 'Р”Р»СЏ РєРѕСЂРѕС‚РєРёС… РІС–РґРµРѕ: СЃС‚Р°РІРёС‚Рё СЂРµРєР»Р°РјСѓ РєРѕР¶РЅС– N СЃРµРєСѓРЅРґ')}
+244:       ${row('Р РµРєР»Р°РјР° РєРѕР¶РЅС– (СЃ) вЂ” РґРѕРІРіС–:', stepper('mra-long-gap', 120, 1, 3600, 1), 'Р”Р»СЏ РґРѕРІРіРёС… РІС–РґРµРѕ: СЃС‚Р°РІРёС‚Рё СЂРµРєР»Р°РјСѓ РєРѕР¶РЅС– N СЃРµРєСѓРЅРґ')}
+245:     </div>
+246:     <div id="mra-manual-sect" style="display:none">
+247:       ${row('РњС–РЅС–РјСѓРј РјС–Р¶ СЂРµРєР»Р°РјР°РјРё (СЃ):', stepper('mra-min-gap', 120, 1, 7200, 1), 'Р СѓС‡РЅРёР№ СЂРµР¶РёРј: РЅРµ СЃС‚Р°РІРёС‚Рё РґРІС– СЂРµРєР»Р°РјРё Р±Р»РёР¶С‡Рµ, РЅС–Р¶ РІРєР°Р·Р°РЅР° РєС–Р»СЊРєС–СЃС‚СЊ СЃРµРєСѓРЅРґ')}
+248:     </div>
+249:   </div>
+250: 
+251:   <button id="mra-analyze">рџ”ґ РђРЅР°Р»С–Р·СѓРІР°С‚Рё РїР°СѓР·Рё</button>
+252: 
+253:   <div class="ms mra-wave-card" id="mra-waveform-section" style="display:none;">
+254:     <div class="mra-wave-head">
+255:       <div class="mra-wave-title">
+256:         <div class="mra-wave-kicker"><span class="mra-wave-dot"></span>Р’РµР№РІС„РѕСЂРјР°</div>
+257:         <div class="mra-wave-sub">Р РµР°Р»СЊРЅС– РїР°СѓР·Рё С‚Р° РјС–СЃС†СЏ РґР»СЏ СЂСѓС‡РЅРѕС— РјС–С‚РєРё</div>
+258:       </div>
+259:       <div class="mra-wave-live">Р°РЅР°Р»С–Р·</div>
+260:     </div>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

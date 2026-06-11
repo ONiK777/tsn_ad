@@ -1,6 +1,87 @@
 // ─── УТИЛІТИ ─────────────────────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Чекає, поки condFn поверне truthy-значення (перевірка кожні intervalMs).
+// Повертає це значення, або null якщо вийшов timeoutMs.
+// У фонових вкладках Chrome тротлить таймери до ~1с — тому timeout тримаємо з запасом.
+async function waitFor(condFn, timeoutMs = 3000, intervalMs = 90) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let v = null;
+    try { v = condFn(); } catch (e) { /* DOM міг змінитись між перевірками */ }
+    if (v) return v;
+    if (Date.now() >= deadline) return null;
+    await sleep(intervalMs);
+  }
+}
+
+function isExtensionContextError(error) {
+  const msg = String(error?.message || error || '');
+  return msg.includes('Extension context invalidated') || msg.includes('context invalidated');
+}
+
+function hasChromeStorage() {
+  try {
+    return typeof chrome !== 'undefined' && !!chrome.runtime?.id && !!chrome.storage?.local;
+  } catch (e) {
+    return false;
+  }
+}
+
+function safeChromeStorageGet(keys, callback, fallback = {}) {
+  if (!hasChromeStorage()) {
+    if (callback) callback(fallback);
+    return false;
+  }
+
+  try {
+    chrome.storage.local.get(keys, (data) => {
+      try {
+        if (chrome.runtime?.lastError) {
+          if (callback) callback(fallback);
+          return;
+        }
+        if (callback) callback(data || fallback);
+      } catch (e) {
+        if (!isExtensionContextError(e)) console.warn('[MRA] chrome.storage.get callback failed:', e);
+        if (callback) callback(fallback);
+      }
+    });
+    return true;
+  } catch (e) {
+    if (!isExtensionContextError(e)) console.warn('[MRA] chrome.storage.get failed:', e);
+    if (callback) callback(fallback);
+    return false;
+  }
+}
+
+function safeChromeStorageSet(values, callback) {
+  if (!hasChromeStorage()) {
+    if (callback) callback(false);
+    return false;
+  }
+
+  try {
+    chrome.storage.local.set(values, () => {
+      try {
+        if (chrome.runtime?.lastError) {
+          if (callback) callback(false);
+          return;
+        }
+        if (callback) callback(true);
+      } catch (e) {
+        if (!isExtensionContextError(e)) console.warn('[MRA] chrome.storage.set callback failed:', e);
+        if (callback) callback(false);
+      }
+    });
+    return true;
+  } catch (e) {
+    if (!isExtensionContextError(e)) console.warn('[MRA] chrome.storage.set failed:', e);
+    if (callback) callback(false);
+    return false;
+  }
+}
+
 // Валідація числових значень
 function isValidNumber(value) {
   return typeof value === 'number' && isFinite(value) && !isNaN(value) && value > 0;
@@ -111,6 +192,35 @@ function updateCachedVideoDuration() {
   _cachedVideoDuration = video && isFinite(video.duration) ? video.duration : 0;
 }
 
+// Чекаємо на завантаження метаданих відео з таймаутом
+async function waitForVideoDuration(timeoutMs = 10000) {
+  const video = document.querySelector('video');
+  if (!video) {
+    return null;
+  }
+
+  // Якщо тривалість вже доступна
+  if (isFinite(video.duration) && video.duration > 0) {
+    return video.duration;
+  }
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      video.removeEventListener('loadedmetadata', onMetadata);
+      resolve(null);
+    }, timeoutMs);
+
+    const onMetadata = () => {
+      clearTimeout(timeout);
+      video.removeEventListener('loadedmetadata', onMetadata);
+      const duration = video.duration;
+      resolve(isFinite(duration) && duration > 0 ? duration : null);
+    };
+
+    video.addEventListener('loadedmetadata', onMetadata);
+  });
+}
+
 function toTimecode(seconds) {
   // YouTube Studio приймає формат [ГГ:]ММ:СС:КК (кадри, 25fps)
   const f = Math.min(24, Math.floor((seconds % 1) * 25));
@@ -124,6 +234,20 @@ function toTimecode(seconds) {
     return `${h}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
   }
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
+}
+
+// Зворотний парсер: "ГГ:ХХ:СС:КК" | "ХХ:СС:КК" | "ХХ:СС" → секунди (кадри 25fps)
+function fromTimecode(tc) {
+  const parts = String(tc || '').trim().split(':').map(p => parseInt(p, 10));
+  if (!parts.length || parts.some(n => isNaN(n))) return null;
+
+  let h = 0, m = 0, s = 0, f = 0;
+  if (parts.length === 4) [h, m, s, f] = parts;
+  else if (parts.length === 3) [m, s, f] = parts; // наш формат без годин: ХХ:СС:КК
+  else if (parts.length === 2) [m, s] = parts;
+  else return null;
+
+  return h * 3600 + m * 60 + s + f / 25;
 }
 
 
@@ -210,6 +334,22 @@ function readSettings() {
     CONFIG.focusStart = document.getElementById('mra-focus-start')?.checked ?? true;
     CONFIG.autoOpenPanel = document.getElementById('mra-auto-open')?.checked ?? true;
     CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
+    CONFIG.autoSaveAfterInsert = document.getElementById('mra-autosave')?.checked ?? true;
+    CONFIG.fullAutoInsert = document.getElementById('mra-full-auto')?.checked ?? false;
+    // Авто-пілот керує цими параметрами сам; ручні значення діють лише коли він вимкнений
+    if (CONFIG.autoGap) {
+      CONFIG.guaranteeStandard = true;
+      CONFIG.rhythmFlexPct = 50;
+      CONFIG.minQualityPct = 0;
+      CONFIG.startOffsetSec = 10;
+      CONFIG.endOffsetSec = 15;
+    } else {
+      CONFIG.guaranteeStandard = document.getElementById('mra-guarantee')?.checked ?? true;
+      CONFIG.rhythmFlexPct = _clamp(getVal('mra-flex'), 10, 90, 50);
+      CONFIG.minQualityPct = _clamp(getVal('mra-min-quality'), 0, 90, 0);
+      CONFIG.startOffsetSec = _clamp(getVal('mra-start-skip'), 0, 600, 10);
+      CONFIG.endOffsetSec = _clamp(getVal('mra-end-skip'), 0, 600, 15);
+    }
 
     CONFIG.minGapSec = _clamp(getVal('mra-min-gap'), 1, 7200, 120);
     CONFIG.shortVideoCutoff = _clamp(getVal('mra-cutoff'), 1, 120, 10) * 60;
@@ -224,7 +364,8 @@ function readSettings() {
 
 // ─── ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ НАЛАШТУВАНЬ ───────────────────────────────────
 var SETTINGS_KEYS = ['autoOpenPanel', 'minSilenceSec', 'silenceThresholdPct', 'focusStart', 'autoGap',
-  'minGapSec', 'shortVideoCutoff', 'longVideoGapSec', 'shortVideoGapSec'];
+  'minGapSec', 'shortVideoCutoff', 'longVideoGapSec', 'shortVideoGapSec', 'autoSaveAfterInsert', 'guaranteeStandard',
+  'rhythmFlexPct', 'minQualityPct', 'startOffsetSec', 'endOffsetSec', 'fullAutoInsert'];
 
 function saveSettings() {
   try {
@@ -247,10 +388,162 @@ function loadSettings() {
   } catch (e) { /* ignore */ }
 }
 
+// ─── АВТОЗБЕРЕЖЕННЯ: Продовжити + Зберегти ──────────────────────────────────
+
+// Знаходить кнопку за aria-label або текстом (підтримка Shadow DOM)
+function findButtonByLabel(labelText) {
+  const targets = labelText.toLowerCase();
+  const variants = [targets];
+
+  // Синоніми для "Продовжити"
+  if (targets === 'продовжити') {
+    variants.push('continue', 'next', 'далі');
+  }
+  // Синоніми для "Зберегти"
+  if (targets === 'зберегти') {
+    variants.push('save', 'збереження');
+  }
+
+  // 1. Швидкий пошук через aria-label
+  for (const v of variants) {
+    const capitalized = v.charAt(0).toUpperCase() + v.slice(1);
+    const btn = document.querySelector('button[aria-label="' + capitalized + '"]');
+    if (btn && btn.getBoundingClientRect().width > 0 && !btn.disabled) return btn;
+
+    const btn2 = document.querySelector('button[aria-label="' + v + '"]');
+    if (btn2 && btn2.getBoundingClientRect().width > 0 && !btn2.disabled) return btn2;
+  }
+
+  // 2. Пошук за текстом у кнопках (aria-label може бути іншим)
+  var candidates = document.querySelectorAll(
+    'ytcp-button-shape button, button, ytcp-button'
+  );
+  for (const btn of candidates) {
+    if (btn.getBoundingClientRect().width === 0 || btn.disabled) continue;
+    var text = (btn.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    var label = (btn.getAttribute('aria-label') || '').toLowerCase();
+    for (const v of variants) {
+      if (text === v || label === v || text.includes(v)) {
+        return btn;
+      }
+    }
+  }
+
+  // 3. Shadow DOM пошук
+  function searchShadowRoot(root) {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        var result = searchShadowRoot(el.shadowRoot);
+        if (result) return result;
+      }
+      var tag = el.tagName ? el.tagName.toLowerCase() : '';
+      if (tag === 'button' || tag.startsWith('ytcp-')) {
+        var rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && !el.disabled) {
+          var stext = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          var slabel = (el.getAttribute ? (el.getAttribute('aria-label') || '') : '').toLowerCase();
+          for (const v of variants) {
+            if (stext === v || slabel === v || stext.includes(v)) {
+              return el;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  return searchShadowRoot(document.body);
+}
+
+// Послідовно натискає "Продовжити", а потім "Зберегти" з очікуванням
+async function autoSaveFlow() {
+  log('🤖 Автозбереження: шукаємо кнопку "Продовжити"...', 'info');
+  updateStatus('🤖 Натискаємо "Продовжити"...', 'info');
+
+  // Чекаємо появу кнопки "Продовжити" (до 10 секунд)
+  const continueBtn = await waitFor(() => findButtonByLabel('Продовжити'), 10000, 150);
+
+  if (!continueBtn) {
+    log('⚠️ Автозбереження: кнопку "Продовжити" не знайдено', 'warn');
+    updateStatus('⚠️ Кнопку "Продовжити" не знайдено. Натисніть вручну.', 'warn');
+    return false;
+  }
+
+  log('🤖 Автозбереження: натискаємо "Продовжити"', 'success');
+  showHud('🤖 Натискаємо "Продовжити"...', 'info', 2000);
+  continueBtn.click();
+  await sleep(250); // буфер, щоб діалог встиг перемкнути стан
+
+  // Чекаємо появу кнопки "Зберегти" — це і є сигнал, що клік оброблено (до 10 секунд)
+  log('🤖 Автозбереження: шукаємо кнопку "Зберегти"...', 'info');
+  updateStatus('🤖 Натискаємо "Зберегти"...', 'info');
+
+  const saveBtn = await waitFor(() => findButtonByLabel('Зберегти'), 10000, 150);
+
+  if (!saveBtn) {
+    log('⚠️ Автозбереження: кнопку "Зберегти" не знайдено', 'warn');
+    updateStatus('⚠️ Кнопку "Зберегти" не знайдено. Натисніть вручну.', 'warn');
+    return false;
+  }
+
+  log('🤖 Автозбереження: натискаємо "Зберегти"', 'success');
+  showHud('🤖 Натискаємо "Зберегти"...', 'info', 2000);
+  saveBtn.click();
+  await sleep(1500);
+
+  log('✅ Автозбереження: готово! Мітки збережено.', 'success');
+  showHud('✅ Мітки збережено!', 'success', 3000);
+  updateStatus('✅ Мітки збережено автоматично!', 'success');
+  return true;
+}
+
+// ─── HEALTH-CHECK: чи на місці критичні елементи Studio ─────────────────────
+// YouTube періодично оновлює інтерфейс — тоді бот ламається тихо.
+// Ця перевірка чесно повідомляє, що саме зникло.
+async function runHealthCheck() {
+  const collect = () => {
+    const problems = [];
+    if (!document.querySelector('video')) problems.push('відеоплеєр');
+    if (!findInsertAdBreakButton()) problems.push('кнопку вставки міток');
+    if (!document.querySelector('input.ytcp-media-timestamp-input, ytcp-media-timestamp-input input')) problems.push('інпут таймкоду');
+    if (!state.waveformUrl) problems.push('вейвформу (не перехоплено)');
+    return problems;
+  };
+
+  await sleep(5000);
+  if (!document.getElementById('mra-panel')) return true;
+  let problems = collect();
+
+  if (problems.length) {
+    // Повільне завантаження редактора — даємо другий шанс
+    await sleep(7000);
+    if (!document.getElementById('mra-panel')) return true;
+    problems = collect();
+  }
+
+  if (problems.length) {
+    log(`🩺 Health-check: не бачу ${problems.join(', ')}. Якщо редактор давно відкритий — YouTube міг оновити інтерфейс, потрібен фікс розширення.`, 'warn');
+    if (!state.analyzing && !state.inserting && !state.selected.length) {
+      updateStatus(`⚠️ Не бачу: ${problems.join(', ')}`, 'warn');
+    }
+    return false;
+  }
+
+  log('🩺 Health-check: усі елементи Studio на місці', 'success');
+  return true;
+}
+globalThis.mraHealthCheck = runHealthCheck;
+
 function resetSettings() {
   const defaults = {
     autoOpenPanel: true,
     autoGap: true,
+    guaranteeStandard: true,
+    rhythmFlexPct: 50,
+    minQualityPct: 0,
+    startOffsetSec: 10,
+    endOffsetSec: 15,
     minGapSec: 120,
     shortVideoCutoff: 600,
     longVideoGapSec: 120,
@@ -258,6 +551,8 @@ function resetSettings() {
     minSilenceSec: 1.5,
     silenceThresholdPct: 15,
     focusStart: true,
+    autoSaveAfterInsert: true,
+    fullAutoInsert: false,
   };
   Object.assign(CONFIG, defaults);
   try {

@@ -1,0 +1,49 @@
+Created At: 2026-06-09T16:08:04Z
+Completed At: 2026-06-09T16:08:04Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 820
+Total Bytes: 44049
+Showing lines 261 to 300
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+261:     <canvas id="mra-waveform" width="282" height="104" title="РљР»С–Рє РїРѕ Р¶РѕРІС‚С–Р№ РІРµСЂС‚РёРєР°Р»С– = РґРѕРґР°С‚Рё/РІРёРґР°Р»РёС‚Рё РјС–С‚РєСѓ"></canvas>
+262:     <div class="mra-wave-toolbar" id="mra-wave-zoom">
+263:       <div class="mra-wave-zoom-group">
+264:         <button class="mra-wave-btn" id="mra-wave-zoom-out" title="Р’С–РґРґР°Р»РёС‚Рё">в€’</button>
+265:         <button class="mra-wave-btn" id="mra-wave-zoom-reset" title="РЎРєРёРЅСѓС‚Рё РјР°СЃС€С‚Р°Р±">100%</button>
+266:         <button class="mra-wave-btn" id="mra-wave-zoom-in" title="РќР°Р±Р»РёР·РёС‚Рё">+</button>
+267:       </div>
+268:       <input id="mra-wave-pan" type="range" min="0" max="100" step="0.01" value="0" title="РџРѕР·РёС†С–СЏ Сѓ Р·Р±С–Р»СЊС€РµРЅС–Р№ РІРµР№РІС„РѕСЂРјС–">
+269:     </div>
+270:     <label class="mra-wave-hints-toggle" id="mra-wave-hints-wrap" title="РџРѕРєР°Р·СѓРІР°С‚Рё Р¶РѕРІС‚С– РІРµСЂС‚РёРєР°Р»С–, РґРµ С‰Рµ РјРѕР¶РЅР° РІСЂСѓС‡РЅСѓ РїРѕСЃС‚Р°РІРёС‚Рё СЂРµРєР»Р°РјСѓ">
+271:       <input id="mra-wave-hints" type="checkbox" checked>
+272:       <span class="mra-wave-switch"></span>
+273:       <span class="mra-wave-hints-copy">РџС–РґРєР°Р·СѓРІР°С‚Рё, РєСѓРґРё РјРѕР¶РЅР° РїРѕСЃС‚Р°РІРёС‚Рё</span>
+274:       <span class="mra-wave-state" id="mra-wave-hints-label">С‚Р°Рє</span>
+275:     </label>
+276:     <div class="mra-wave-legend">
+277:       <span class="mra-wave-chip"><span class="mra-wave-swatch"></span>Р°РІС‚Рѕ</span>
+278:       <span class="mra-wave-chip"><span class="mra-wave-swatch manual"></span>РІСЂСѓС‡РЅСѓ</span>
+279:       <span class="mra-wave-chip"><span class="mra-wave-swatch sound"></span>Р·РІСѓРє</span>
+280:       <span class="mra-wave-chip"><span class="mra-wave-swatch hint"></span>РјРѕР¶РЅР° РІСЂСѓС‡РЅСѓ</span>
+281:     </div>
+282:   </div>
+283:   <button id="mra-clear">рџ—‘пёЏ РћС‡РёСЃС‚РёС‚Рё РІСЃС– РјС–С‚РєРё РЅР° РІС–РґРµРѕ</button>
+284:   <div id="mra-progress-label"></div>
+285:   <div id="mra-progress-wrap"><div id="mra-progress-bar"></div></div>
+286:   <div id="mra-status">Р“РѕС‚РѕРІРёР№ РґРѕ СЂРѕР±РѕС‚Рё</div>
+287: </div>
+288:   `;
+289: 
+290:   document.body.appendChild(panel);
+291: 
+292:   // в”Ђв”Ђ Р’С–РґРЅРѕРІР»СЋС”РјРѕ СЂРѕР·РјС–СЂРё РїР°РЅРµР»С– в”Ђв”Ђ
+293:   safeChromeStorageGet(['mraPanelWidth', 'mraPanelHeight'], (data) => {
+294:     if (data.mraPanelWidth) panel.style.width = data.mraPanelWidth;
+295:     if (data.mraPanelHeight) panel.style.height = data.mraPanelHeight;
+296:   });
+297: 
+298:   // в”Ђв”Ђ Р—Р±РµСЂС–РіР°С”РјРѕ СЂРѕР·РјС–СЂРё РїР°РЅРµР»С– РїСЂРё СЂРѕР·С‚СЏРіСѓРІР°РЅРЅС– в”Ђв”Ђ
+299:   let resizeTimer;
+300:   new ResizeObserver(() => {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

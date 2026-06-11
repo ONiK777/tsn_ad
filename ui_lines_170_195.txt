@@ -1,0 +1,34 @@
+Created At: 2026-06-09T16:08:37Z
+Completed At: 2026-06-09T16:08:37Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 825
+Total Bytes: 44402
+Showing lines 170 to 195
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+170: #mra-wave-pan::-moz-range-track{height:6px;border-radius:999px;background:linear-gradient(90deg,rgba(45,212,191,.85),rgba(245,158,11,.75));}
+171: #mra-wave-pan::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:#f9fafb;border:1px solid rgba(255,255,255,.9);}
+172: .mra-wave-hints-toggle{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin-top:9px;padding:7px 8px;border-radius:9px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);color:#b8c0cc;font-size:9.5px;line-height:1.2;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.035);}
+173: .mra-wave-hints-toggle input{position:absolute;opacity:0;pointer-events:none;}
+174: .mra-wave-switch{position:relative;width:31px;height:18px;flex-shrink:0;border-radius:999px;background:rgba(148,163,184,.18);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);transition:background .18s ease,box-shadow .18s ease;}
+175: .mra-wave-switch:before{content:'';position:absolute;width:14px;height:14px;left:2px;top:2px;border-radius:50%;background:#f8fafc;box-shadow:0 3px 10px rgba(0,0,0,.42);transition:transform .18s ease;}
+176: .mra-wave-hints-toggle input:checked+.mra-wave-switch{background:rgba(245,158,11,.9);box-shadow:0 0 16px rgba(245,158,11,.18);}
+177: .mra-wave-hints-toggle input:checked+.mra-wave-switch:before{transform:translateX(13px);background:#111827;}
+178: #mra-wave-hints:focus-visible+.mra-wave-switch{outline:2px solid #ffffff;outline-offset:2px;}
+179: .mra-wave-hints-toggle.is-off{color:#717b8b;}
+180: .mra-wave-hints-toggle.is-off .mra-wave-switch{background:rgba(148,163,184,.16);box-shadow:inset 0 0 0 1px rgba(148,163,184,.12);}
+181: .mra-wave-hints-copy{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+182: .mra-wave-state{padding:3px 6px;border-radius:999px;background:rgba(245,158,11,.14);color:#fbbf24;font-weight:900;text-transform:uppercase;letter-spacing:.35px;}
+183: .mra-wave-hints-toggle.is-off .mra-wave-state{background:rgba(148,163,184,.1);color:#7b8493;}
+184: .mra-wave-legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;color:#778294;font-size:8.8px;}
+185: .mra-wave-chip{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
+186: .mra-wave-swatch{width:13px;height:2px;border-radius:999px;display:inline-block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,.42);}
+187: .mra-wave-swatch.manual{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.35);}
+188: .mra-wave-swatch.sound{width:5px;height:11px;background:#d1d5db;box-shadow:none;}
+189: .mra-wave-swatch.hint{width:2px;height:11px;background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.28);}
+190: @keyframes mra-pulse-red{0%,100%{box-shadow:0 0 5px rgba(229,46,46,0.2);border-color:rgba(229,46,46,0.3)}50%{box-shadow:0 0 15px rgba(229,46,46,0.8);border-color:rgba(229,46,46,0.8)}}
+191: @keyframes mra-pulse-yellow{0%,100%{box-shadow:0 0 5px rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3)}50%{box-shadow:0 0 15px rgba(251,191,36,0.8);border-color:rgba(251,191,36,0.8)}}
+192: .mra-pulse-red{animation:mra-pulse-red 2s ease-in-out infinite}
+193: .mra-pulse-yellow{animation:mra-pulse-yellow 2.5s ease-in-out infinite}
+194: </style>
+195: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,35 @@
+Created At: 2026-06-09T16:08:38Z
+Completed At: 2026-06-09T16:08:38Z
+File Path: `file:///c:/Users/a.onyshchuk/Documents/yt-midroll-extension/yt-midroll-extension/src/ui.js`
+Total Lines: 825
+Total Bytes: 44402
+Showing lines 125 to 165
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+125: input:checked+.msl{background:var(--mra-primary);box-shadow:0 0 10px var(--mra-primary-glow);}
+126: input:checked+.msl:before{transform:translateX(12px);background:#fff}
+127: input:focus-visible+.msl{outline:2px solid #ffffff;outline-offset:2px;box-shadow:0 0 0 3px var(--mra-primary-glow);}
+128: .mtl{color:#bbb;font-size:10px;cursor:pointer;transition:color 0.2s;}
+129: .mtl:hover{color:#fff;}
+130: #mra-analyze,#mra-insert,#mra-clear{width:100%;padding:8px;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:0.5px;transition:all .3s;margin-bottom:6px;position:relative;overflow:hidden;outline:none;}
+131: #mra-analyze{background:var(--mra-primary-grad);color:#ffffff;box-shadow:0 4px 15px var(--mra-primary-glow);}
+132: #mra-analyze:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,46,85,0.4);}
+133: #mra-analyze:focus-visible{outline:2px solid #ffffff;outline-offset:2px;}
+134: #mra-insert{background:rgba(255,46,85,0.1);color:var(--mra-primary);border:1px solid rgba(255,46,85,0.3);}
+135: #mra-insert:hover:not(:disabled){background:var(--mra-primary);color:#fff;box-shadow:0 4px 15px var(--mra-primary-glow);}
+136: #mra-insert:focus-visible:not(:disabled){outline:2px solid #ffffff;outline-offset:2px;}
+137: #mra-insert:disabled{opacity:.4;cursor:not-allowed;border-color:rgba(255,255,255,0.1);color:#777;background:rgba(255,255,255,0.02);}
+138: #mra-clear{background:rgba(255,255,255,0.05);color:#bbb;border:1px solid rgba(255,255,255,0.1);margin-bottom:8px}
+139: #mra-clear:hover{
+<truncated 2016 bytes>
+ter-spacing:.2px;text-transform:none;}
+156: .mra-wave-dot{width:7px;height:7px;border-radius:50%;background:#2dd4bf;box-shadow:0 0 14px rgba(45,212,191,.72);}
+157: .mra-wave-sub{margin-top:2px;color:#8b95a5;font-size:9.5px;line-height:1.25;}
+158: .mra-wave-live{flex-shrink:0;color:#f8fafc;font-size:8.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:4px 7px;border:1px solid rgba(45,212,191,.22);border-radius:999px;background:rgba(255,255,255,.045);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}
+159: #mra-waveform{display:block;width:100%;height:104px;box-sizing:border-box;border:1px solid rgba(255,255,255,.1);border-radius:9px;cursor:crosshair;background:#101114;box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 10px 24px rgba(0,0,0,.22);}
+160: .mra-wave-toolbar{display:grid;grid-template-columns:88px minmax(96px,1fr);align-items:center;gap:8px;margin-top:9px;}
+161: .mra-wave-zoom-group{display:grid;grid-template-columns:24px 1fr 24px;align-items:center;gap:1px;padding:3px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.08);border-radius:999px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}
+162: .mra-wave-btn{height:24px;min-width:24px;padding:0;border:0;border-radius:999px;background:transparent;color:#aeb8c6;cursor:pointer;font-size:12px;font-weight:900;line-height:1;display:flex;align-items:center;justify-content:center;transition:background .16s ease,color .16s ease,transform .16s ease;outline:none;}
+163: .mra-wave-btn:hover{background:rgba(255,255,255,.09);color:#fff;transform:translateY(-1px);}
+164: .mra-wave-btn:focus-visible{outline:2px solid #ffffff;border-radius:50%;}
+165: #mra-wave-zoom-reset{min-width:34px;color:#fff;font-size:10px;font-weight:900;background:transparent;border-left:1px solid rgba(255,255,255,.07);border-right:1px solid rgba(255,255,255,.07);border-radius:0;}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
