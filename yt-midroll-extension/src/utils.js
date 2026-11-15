@@ -466,8 +466,13 @@ function findButtonByLabel(labelText) {
     }
   }
 
-  // 3. Shadow DOM пошук
+  // 3. Shadow DOM пошук: спершу шукаємо у активних діалогах/редакторі, потім у всьому body
   function searchShadowRoot(root) {
+    if (!root) return null;
+    if (root.shadowRoot) {
+      const res = searchShadowRoot(root.shadowRoot);
+      if (res) return res;
+    }
     for (const el of root.querySelectorAll('*')) {
       if (el.shadowRoot) {
         var result = searchShadowRoot(el.shadowRoot);
@@ -488,6 +493,12 @@ function findButtonByLabel(labelText) {
       }
     }
     return null;
+  }
+
+  const scopedRoots = document.querySelectorAll('ytcp-dialog:not([hidden]), tp-yt-paper-dialog:not([aria-hidden="true"]), ytve-ad-breaks-editor, ytve-editor');
+  for (const root of scopedRoots) {
+    const found = searchShadowRoot(root);
+    if (found) return found;
   }
 
   return searchShadowRoot(document.body);
@@ -527,7 +538,14 @@ async function autoSaveFlow() {
   log('🤖 Автозбереження: натискаємо "Зберегти"', 'success');
   showHud('🤖 Натискаємо "Зберегти"...', 'info', 2000);
   saveBtn.click();
-  await sleep(1500);
+  await sleep(300);
+
+  const saveConfirmed = await waitFor(() => !findButtonByLabel('Зберегти'), 8000, 200);
+  if (!saveConfirmed) {
+    log('⚠️ Автозбереження: кнопка "Зберегти" досі активна — перевірте, чи не виникла помилка збереження', 'warn');
+    updateStatus('⚠️ Не вдалося підтвердити збереження — перевірте кнопку «Зберегти» вручну.', 'warn');
+    return false;
+  }
 
   log('✅ Автозбереження: готово! Мітки збережено.', 'success');
   showHud('✅ Мітки збережено!', 'success', 3000);

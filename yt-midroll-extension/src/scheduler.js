@@ -289,9 +289,13 @@
 
     const UA_SHORT = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
     const UA_FULL = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+    const EN_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const EN_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
     const ms = UA_SHORT[mo];
     const mf = UA_FULL[mo];
+    const es = EN_SHORT[mo];
+    const ef = EN_FULL[mo];
 
     return [
       // Точний формат зі скріншота: "9 бер. 2026 р." / "10 бер. 2026 р."
@@ -306,6 +310,13 @@
       // Повна назва місяця
       `${d} ${mf} ${y}`,
       `${dd} ${mf} ${y}`,
+      // Англійські формати (Studio англійською мовою)
+      `${es} ${d}, ${y}`,
+      `${es} ${dd}, ${y}`,
+      `${d} ${es} ${y}`,
+      `${dd} ${es} ${y}`,
+      `${ef} ${d}, ${y}`,
+      `${d} ${ef} ${y}`,
       // Числові формати
       `${dd}.${mm}.${y}`,
       `${dd}/${mm}/${y}`,

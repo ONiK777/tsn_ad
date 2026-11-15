@@ -536,13 +536,35 @@ function renderWaveform() {
   }
 
   // ── Жовті вертикалі: паузи, куди ще можна поставити вручну ──
-  if (state.waveformManualHints !== false) {
+  if (state.waveformManualHints !== false && Array.isArray(state.silences)) {
+    const hasNearSecond = (sortedArr, sec, tol) => {
+      let low = 0;
+      let high = sortedArr.length - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const diff = sortedArr[mid] - sec;
+        if (Math.abs(diff) < tol) return true;
+        if (diff < 0) {
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return false;
+    };
+
+    const occupiedSecs = [
+      ...(Array.isArray(state.selected) ? state.selected : []),
+      ...(Array.isArray(state.existingMarks) ? state.existingMarks : []),
+      ...(Array.isArray(state.ytAutoMarks) ? state.ytAutoMarks : [])
+    ]
+      .filter(m => m && m.seconds != null && Number.isFinite(Number(m.seconds)))
+      .map(m => Number(m.seconds))
+      .sort((a, b) => a - b);
+
     state.silences.forEach(s => {
-      const alreadySelected = state.selected.some(sel => Math.abs(sel.seconds - s.seconds) < 1)
-        || (Array.isArray(state.existingMarks) && state.existingMarks.some(m => Math.abs(m.seconds - s.seconds) < 1))
-        || (Array.isArray(state.ytAutoMarks) && state.ytAutoMarks.some(m => Math.abs(m.seconds - s.seconds) < 1));
-      if (alreadySelected) return;
       if (!isTimeVisible(s.seconds)) return;
+      if (hasNearSecond(occupiedSecs, s.seconds, 1)) return;
 
       const sx = timeToX(s.seconds);
       const quality = Math.max(0, Math.min(1, Number(s.quality_score) || 0.45));

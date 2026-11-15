@@ -7,9 +7,6 @@
 //    вимкненим свідомо — трималося на крихкому скрейпінгу чужого інтерфейсу. ──
 var MRA_VERIFY_AFTER_INSERT = false; // читати вердикт YT і чистити/пересувати ⚠️ після вставки
 var MRA_SEND_TG_REPORTS = true;      // слати телеграм-звіти (аналіз «мало пауз» / вставка / no_spots)
-// Стат-пульс (сирий JSON на КОЖНУ вставку в окремий канал) вимкнено окремо:
-// власнику він безкорисний. Решта звітів працює. Постав true — і пульс повернеться.
-var MRA_SEND_STATS_PULSE = false;
 
 // Назва відео: document.title на сторінці редактора міток показує назву РОЗДІЛУ Studio
 // («Способи заробляти»), тому спершу пробуємо елементи з реальною назвою відео.
@@ -598,11 +595,6 @@ async function _doAnalyze() {
   const flex = Math.min(0.9, Math.max(0.1, (CONFIG.rhythmFlexPct ?? 50) / 100));
   const flexWide = Math.min(0.95, flex * 1.6);
 
-  // Стабільна опора якості: НЕ залежить від рівня ескалації чутливості.
-  // Якість міряємо відносно частки середньої гучності відео, тому 70% означає
-  // те саме на будь-якому рівні драбини — і калібрування за вердиктами YT не пливе.
-  const QUALITY_REF = Math.max(avgAbs * 0.35, 0.000001);
-
   // Локальна опора якості та адаптивного порогу: враховує локальну гучність мовлення
   const BIN_SEC = 5;
   const numBins = Math.max(1, Math.ceil(duration / BIN_SEC));
@@ -658,7 +650,7 @@ async function _doAnalyze() {
   const ytHints = (() => {
     const raw = state.ytAdHintsRaw?.times;
     if (!Array.isArray(raw) || raw.length < 3) return [];
-    const maxT = Math.max(...raw);
+    const maxT = arrayMax(raw);
     const scale = maxT > duration * 2 ? 1 / 1000 : 1;
     const secs = raw.map(t => t * scale)
       .filter(s => isFinite(s) && s >= startOffset && s <= duration - endOffset)
@@ -672,6 +664,13 @@ async function _doAnalyze() {
 
   const maxAmp = arrayMax(smoothed);
   const clamp01 = (value) => Math.max(0, Math.min(1, value));
+  const MIN_CONTRAST = 0.25;
+  const applyContrastPenalty = (score, amp, surroundAvg, contrast) => {
+    if (amp > 0.001 && surroundAvg > 0 && contrast < MIN_CONTRAST) {
+      return clamp01(score * (0.45 + 0.55 * (contrast / MIN_CONTRAST)));
+    }
+    return score;
+  };
 
   console.group('%c🔍 АНАЛІЗ', 'color:#ffd166;font-weight:bold');
   console.log(`  Max амплітуда:    ${maxAmp.toFixed(4)}`);
@@ -841,8 +840,10 @@ async function _doAnalyze() {
       const afterAvg = avgOf(eB, Math.min(totalBlocks, eB + padB));
       const surroundAvg = Math.max(beforeAvg, afterAvg);
       const contrast = surroundAvg > 0 ? clamp01(1 - bestAvg / surroundAvg) : 0;
+      p.contrast = +contrast.toFixed(3);
 
-      return clamp01(coreQuiet * 0.45 + avgQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+      const baseScore = clamp01(coreQuiet * 0.45 + avgQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+      return applyContrastPenalty(baseScore, bestAvg, surroundAvg, contrast);
     };
 
     rawSilences.forEach(p => {
@@ -851,7 +852,7 @@ async function _doAnalyze() {
       p.quality_label = quality >= 0.78 ? 'люкс' : (quality >= ytAccept ? 'добра' : 'ок');
     });
 
-    return { rawSilences, threshold: GLOBAL_THRESHOLD };
+    return { rawSilences, threshold: GLOBAL_THRESHOLD, localThrByBin, binSec: BIN_SEC };
   };
 
   // ── Зчитуємо мітки, що вже стоять на відео (до запуску планувальника).
@@ -1271,7 +1272,8 @@ async function _doAnalyze() {
               const durationFit = clamp01(spotLen / Math.max((CONFIG.minSilenceSec ?? 1.5) * 2, 0.001));
               // avgQuiet: spot має лише одне avg, тому reuse coreQuiet для 0.15-терму середньої
               const contrast = spot.surroundAvg > 0 ? clamp01(1 - spot.avgAmp / spot.surroundAvg) : 0;
-              const relQuiet = clamp01(coreQuiet * 0.45 + coreQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+              const rawScore = clamp01(coreQuiet * 0.45 + coreQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+              const relQuiet = applyContrastPenalty(rawScore, spot.avgAmp, spot.surroundAvg, contrast);
 
               // «Без пропусків» тепер не означає «за будь-яку ціну»: якщо навіть найтихіше
               // місце вікна занадто гучне (тихо-в-тихому без реального провалу відносно
@@ -1291,6 +1293,7 @@ async function _doAnalyze() {
                   avg_amplitude: +spot.avgAmp.toFixed(4),
                   best_avg_amplitude: +spot.avgAmp.toFixed(4),
                   max_amplitude: +(spot.maxAmp ?? spot.avgAmp).toFixed(4),
+                  contrast: +contrast.toFixed(3),
                   quality_score: +relQuiet.toFixed(3),
                   quality_label: 'запасна',
                   fallbackSpot: true
@@ -1331,7 +1334,7 @@ async function _doAnalyze() {
   //    бот сам послаблює критерії (вищий поріг, коротша мін. пауза) ──
   const baseMinS = CONFIG.minSilenceSec ?? 1.5;
   const baseThr = CONFIG.silenceThresholdPct ?? 15;
-  const ladder = CONFIG.autoGap
+  const rawLadder = CONFIG.autoGap
     ? [
       { minS: baseMinS, thr: baseThr },
       { minS: Math.min(baseMinS, 1.2), thr: Math.min(baseThr + 5, 45) },
@@ -1340,11 +1343,29 @@ async function _doAnalyze() {
     ]
     : [{ minS: baseMinS, thr: baseThr }];
 
+  const ladder = [];
+  const seenLadder = new Set();
+  for (const step of rawLadder) {
+    const key = `${step.minS}_${step.thr}`;
+    if (!seenLadder.has(key)) {
+      seenLadder.add(key);
+      ladder.push(step);
+    }
+  }
+
+  let lastSelectionKey = null;
+  let lastCands = null;
   let best = null;
   for (let li = 0; li < ladder.length; li++) {
     const lv = ladder[li];
     const det = runDetection(lv.minS, lv.thr);
-    const cands = runSelection(det.rawSilences, lv.minS);
+    const rawSig = det.rawSilences.map(p => `${p.seconds}:${p.duration_sec}:${p.quality_score}`).join(';');
+    const selKey = `${rawSig}|${lv.minS}`;
+    const cands = (selKey === lastSelectionKey && lastCands)
+      ? lastCands
+      : runSelection(det.rawSilences, lv.minS);
+    lastSelectionKey = selKey;
+    lastCands = cands;
     const realCount = cands.filter(c => !c.fallbackSpot).length;
 
     log(`🤖 Чутливість ${li + 1}/${ladder.length} (поріг ${lv.thr}%, пауза ≥${lv.minS}с): пауз ${det.rawSilences.length}, природних міток ${realCount}/${idealAds}`, 'info');
@@ -1367,7 +1388,8 @@ async function _doAnalyze() {
     for (let i = 0; i < totalBlocks; i += stepViz) {
       const timeSec = i * secPerBlock;
       const isPause = rawSilences.some(p => Math.abs(p.seconds - timeSec) < 5);
-      timeline += isPause ? '🔇' : (smoothed[i] < best.det.threshold ? '░' : '█');
+      const bin = Math.min(best.det.localThrByBin.length - 1, Math.floor(timeSec / best.det.binSec));
+      timeline += isPause ? '🔇' : (smoothed[i] < best.det.localThrByBin[bin] ? '░' : '█');
     }
     console.log('%c📍 Розташування пауз на тімлайні:', 'color:#06d6a0;font-weight:bold');
     console.log(`  ${timeline}`);
@@ -2231,7 +2253,7 @@ async function insertTimecodes() {
             document.hidden ? 1500 : 800,
             120
           );
-          await sleep(document.hidden ? 300 : 160);
+          await sleep(document.hidden ? 150 : 80);
         } else {
           await sleep(600);
         }
@@ -2252,7 +2274,7 @@ async function insertTimecodes() {
           appeared = await waitFor(() => getAdBreakDeleteButtons().length > deleteBtnsBefore.length, 2500);
         }
         if (!appeared) throw new Error('Рядок мітки не з\'явився у списку');
-        await sleep(document.hidden ? 250 : 120); // мікро-осідання DOM після появи рядка
+        await sleep(document.hidden ? 140 : 70); // мікро-осідання DOM після появи рядка
 
         // 4. Визначаємо додані рядки
         const afterRows = getAdBreakRows();
@@ -2324,7 +2346,7 @@ async function insertTimecodes() {
         ok++;
         updateProgress(ok, pendingSilences.length);
         log(`✅ ${s.timecode} вставлено`, 'success');
-        await sleep(document.hidden ? 700 : 250); // коротке осідання — факт вставки вже перевірено
+        await sleep(document.hidden ? 450 : 150); // коротке осідання — факт вставки вже перевірено
       } catch (e) {
         fail++;
         log(`❌ ${s.timecode}: ${e.message}`, 'error');
@@ -2459,54 +2481,6 @@ async function insertTimecodes() {
       }
     } catch (e) {
       console.error('[TSN ANALYZER] ❌ Error sending post-insert report:', e);
-    }
-
-    // ── Стат-пульс: компактний АНОНІМНИЙ звіт на КОЖНУ вставку → окремий канал ──
-    // Шлеться завжди (а не лише на проблемних відео), бо саме успішні вставки —
-    // це знаменник для «який % YT приймає одразу». Жодних ідентифікаторів
-    // користувача чи відео: тільки позиції, акустичні ознаки та доля міток.
-    try {
-      const durSec = _cachedVideoDuration || (state.waveformData && state.waveformData.duration) || 0;
-      const meta = state.analysisMeta || {};
-      const events = state.tgEvents || [];
-      const removedCnt = events.filter(ev => ev.type === 'yt_flag_removed').length;
-      const survivors = state.selected || [];
-      const srcOf = (s) => s.fromYt ? 'ytAuto' : s.ytHint ? 'ytHint' : (s.fallbackSpot ? 'fallback' : 'natural');
-      const movedCnt = survivors.filter(s => s.movedByYtCheck).length;
-      // Мітки, лишені з попередженням YT, НЕ рахуємо як «прийнято одразу»
-      const flaggedKeptCnt = survivors.filter(s => s.ytFlaggedKept).length;
-      const acceptedFirstTry = survivors.filter(s => !s.movedByYtCheck && !s.ytFlaggedKept).length;
-      const num = (v) => typeof v === 'number' ? v : null;
-      // Кап на 80 міток у тілі (лічильники беруться з повного survivors, не з обрізаного)
-      const marks = survivors.slice(0, 80).map(s => ({
-        pos: durSec > 0 ? +(s.seconds / durSec).toFixed(3) : null,
-        src: srcOf(s),
-        q: num(s.quality_score),
-        avg: num(s.avg_amplitude),
-        best: num(s.best_avg_amplitude),
-        peak: num(s.max_amplitude),
-        dur: num(s.duration_sec),
-        moved: !!s.movedByYtCheck,
-        flaggedKept: !!s.ytFlaggedKept
-      }));
-      if (MRA_SEND_TG_REPORTS && MRA_SEND_STATS_PULSE) chrome.runtime.sendMessage({
-        action: 'mra_tg_stats',
-        stats: {
-          ts: Date.now(),
-          videoTitle: getVideoTitle(),
-          durSec: Math.round(durSec),
-          idealAds: meta.idealAds || null,
-          planned: ok + fail,
-          placed: survivors.length,
-          acceptedFirstTry,
-          moved: movedCnt,
-          removed: removedCnt,
-          flaggedKept: flaggedKeptCnt,
-          marks
-        }
-      }, () => { if (chrome.runtime.lastError) { /* канал недоступний — не критично */ } });
-    } catch (e) {
-      console.warn('[TSN ANALYZER] стат-пульс не надіслано:', e);
     }
 
     // Autosave: click Continue and Save
