@@ -490,14 +490,14 @@ function readSettings() {
       CONFIG.guaranteeStandard = true;
       CONFIG.rhythmFlexPct = 50;
       CONFIG.minQualityPct = 0;
-      CONFIG.startOffsetSec = 10;
-      CONFIG.endOffsetSec = 15;
+      CONFIG.startOffsetSec = 40;
+      CONFIG.endOffsetSec = 45;
     } else {
       CONFIG.guaranteeStandard = document.getElementById('mra-guarantee')?.checked ?? true;
       CONFIG.rhythmFlexPct = _clamp(getVal('mra-flex'), 10, 90, 50);
       CONFIG.minQualityPct = _clamp(getVal('mra-min-quality'), 0, 90, 0);
-      CONFIG.startOffsetSec = _clamp(getVal('mra-start-skip'), 0, 600, 10);
-      CONFIG.endOffsetSec = _clamp(getVal('mra-end-skip'), 0, 600, 15);
+      CONFIG.startOffsetSec = _clamp(getVal('mra-start-skip'), 0, 600, 40);
+      CONFIG.endOffsetSec = _clamp(getVal('mra-end-skip'), 0, 600, 45);
     }
 
     CONFIG.minGapSec = _clamp(getVal('mra-min-gap'), 1, 7200, 120);
@@ -709,8 +709,8 @@ function resetSettings() {
     guaranteeStandard: true,
     rhythmFlexPct: 50,
     minQualityPct: 0,
-    startOffsetSec: 10,
-    endOffsetSec: 15,
+    startOffsetSec: 40,
+    endOffsetSec: 45,
     minGapSec: 120,
     shortVideoCutoff: 600,
     longVideoGapSec: 120,

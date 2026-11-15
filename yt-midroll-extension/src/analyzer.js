@@ -586,12 +586,30 @@ async function _doAnalyze() {
   log(`Огинаюча: ${totalBlocks} блоків, ${secPerBlock.toFixed(3)}с/блок, згладж. ±${smBlocks}бл, fmt=${fmt}`, 'info');
 
   // ── Авто-пілот: ціль за стандартом ТСН (~1 реклама / 2 хв) ──────────────────
-  const idealAds = Math.max(1, Math.floor(duration / 120));
-  const gap = CONFIG.autoGap ? duration / idealAds : CONFIG.minGapSec;
+  const startOffset = Math.max(0, CONFIG.startOffsetSec ?? 40);
+  const endOffset = Math.max(0, CONFIG.endOffsetSec ?? 45);
+  const baseGap = CONFIG.autoGap ? 120 : (CONFIG.minGapSec ?? 120);
+  const idealGapAt = (t) => (typeof getIdealAdGapAt === 'function') ? getIdealAdGapAt(t, baseGap) : baseGap;
+  const estimateTargetCount = (segA, segB) => {
+    const effStart = Math.max(segA, startOffset);
+    const effEnd = Math.min(segB, duration - endOffset);
+    if (effEnd <= effStart) return 0;
+    if (!CONFIG.focusStart) return Math.max(1, Math.round((effEnd - segA) / baseGap));
+    let t = segA;
+    let cnt = 0;
+    while (true) {
+      const g = idealGapAt(t);
+      t += g;
+      if (t > effEnd) break;
+      if (t >= effStart - g * 0.35) cnt++;
+    }
+    return Math.max(1, cnt);
+  };
+  const idealAds = estimateTargetCount(0, duration);
+  const gap = baseGap;
+  const avgGap = Math.round((duration - startOffset - endOffset) / Math.max(1, idealAds));
 
   // Експертні параметри (в авто-режимі — дефолти, у ручному — з повзунків)
-  const startOffset = Math.max(0, CONFIG.startOffsetSec ?? 10);
-  const endOffset = Math.max(0, CONFIG.endOffsetSec ?? 15);
   const flex = Math.min(0.9, Math.max(0.1, (CONFIG.rhythmFlexPct ?? 50) / 100));
   const flexWide = Math.min(0.95, flex * 1.6);
 
@@ -675,7 +693,11 @@ async function _doAnalyze() {
   console.group('%c🔍 АНАЛІЗ', 'color:#ffd166;font-weight:bold');
   console.log(`  Max амплітуда:    ${maxAmp.toFixed(4)}`);
   console.log(`  Середня (avgAbs): ${avgAbs.toFixed(4)}`);
-  console.log(`  Ціль: ${idealAds} міток (1/~2хв), ритм ~${Math.round(gap)}с (${CONFIG.autoGap ? 'авто-пілот' : 'вручну'})`);
+  if (CONFIG.focusStart && CONFIG.autoGap) {
+    console.log(`  Ціль: ${idealAds} міток (AVD 70→130→165с, авто-пілот)`);
+  } else {
+    console.log(`  Ціль: ${idealAds} міток (1/~2хв), ритм ~${Math.round(gap)}с (${CONFIG.autoGap ? 'авто-пілот' : 'вручну'})`);
+  }
   console.groupEnd();
 
   // Пошук пауз при заданій чутливості. Поріг = max(відсоток від середньої гучності, перцентиль)
@@ -893,13 +915,9 @@ async function _doAnalyze() {
     const sortedSilences = [...rawSilences].sort((a, b) => a.seconds - b.seconds);
 
     // ── Глобальний план (DP): найкращий набір міток по всьому відео ──
-    const idealGapAt = (t) => {
-      if (!CONFIG.focusStart) return gap;
-      const g = gap * (0.5 + (t / duration) * 0.5);
-      return CONFIG.autoGap ? g * 1.386 : g;
-    };
-    const maxIdealGap = CONFIG.focusStart && CONFIG.autoGap ? gap * 1.386 : gap;
-    const minIdealGap = CONFIG.focusStart ? gap * 0.5 * (CONFIG.autoGap ? 1.386 : 1) : gap;
+    const zoneGaps = [idealGapAt(0), idealGapAt(330), idealGapAt(600), baseGap];
+    const maxIdealGap = Math.max(...zoneGaps);
+    const minIdealGap = Math.min(...zoneGaps);
 
     let preferred = [];
     try {
@@ -979,7 +997,7 @@ async function _doAnalyze() {
           const segCands = dpCands.filter(c => c.seconds >= segMinT && c.seconds <= segMaxT);
           if (!segCands.length) continue;
 
-          const rawTarget = Math.round(span / gap) - (aLeft > 0 && aRight < duration ? 1 : 0);
+          const rawTarget = estimateTargetCount(aLeft, aRight) - (aLeft > 0 && aRight < duration ? 1 : 0);
           const targetCount = Math.max(1, rawTarget);
 
           const planIdx = dpPlanMarks(segCands, {
@@ -1016,12 +1034,7 @@ async function _doAnalyze() {
     let playhead = 0;
 
     while (true) {
-      let currentGap = gap;
-      if (CONFIG.focusStart) {
-        const pos = playhead / duration;
-        currentGap = gap * (0.5 + pos * 0.5);
-        if (CONFIG.autoGap) currentGap *= 1.386;
-      }
+      const currentGap = idealGapAt(playhead);
 
       let target = playhead + currentGap;
       if (target > duration - endOffset) break;
@@ -1478,10 +1491,12 @@ async function _doAnalyze() {
 
       // Менший mergedGap кращий для видалення (не утворює дірок у сітці);
       // fallbackSpot та слабша якість дають пріоритет до видалення при близьких прольотах
+      const zoneRefGap = Math.max(1, idealGapAt(s.seconds));
+      const normalizedGap = (mergedGap / zoneRefGap) * 120;
       const quality = Number(s.quality_score ?? 0);
       const fallbackBonus = s.fallbackSpot ? 20 : 0;
       const qualityBonus = (1 - quality) * 10;
-      const cost = mergedGap - fallbackBonus - qualityBonus;
+      const cost = normalizedGap - fallbackBonus - qualityBonus;
 
       if (cost < minCost) {
         minCost = cost;
@@ -1511,7 +1526,7 @@ async function _doAnalyze() {
   // Підсумок авто-пілота для діагнозу відео (рендериться під статистикою)
   state.analysisMeta = {
     idealAds,
-    gap: Math.round(gap),
+    gap: Math.round(avgGap),
     escalated: best.level > 0,
     finalThr: best.thr,
     finalMinS: best.minS,
@@ -1538,14 +1553,14 @@ async function _doAnalyze() {
     console.log('  ⚠️ Не вдалось знайти підходящих пауз з таким інтервалом та параметрами!');
   console.groupEnd();
 
-  const gapR = Math.round(gap);
+  const rhythmText = (CONFIG.focusStart && CONFIG.autoGap) ? '70→130→165с' : `~${Math.round(avgGap)}с`;
   const ytAutoCountLog = ytAnchors.length > 0 ? `, якорів YT: ${ytAnchors.length}` : '';
-  log(`Відібрано ${state.selected.length}/${idealAds} місць (природних: ${realCnt}, запасних: ${backupCount}${ytAutoCountLog}, ритм ~${gapR}с${best.level > 0 ? `, бот підняв чутливість до ${best.thr}%` : ''}, межа YT ${Math.round(ytAccept * 100)}%)`, state.selected.length > 0 ? 'success' : 'warn');
+  log(`Відібрано ${state.selected.length}/${idealAds} місць (природних: ${realCnt}, запасних: ${backupCount}${ytAutoCountLog}, ритм ${rhythmText}${best.level > 0 ? `, бот підняв чутливість до ${best.thr}%` : ''}, межа YT ${Math.round(ytAccept * 100)}%)`, state.selected.length > 0 ? 'success' : 'warn');
   updateStatus(
     state.selected.length > 0
       ? (backupCount > 0
-        ? `✅ ${state.selected.length}/${idealAds} позицій (${backupCount} запасн.) · ритм ~${gapR}с`
-        : `✅ ${state.selected.length}/${idealAds} позицій · ритм ~${gapR}с`)
+        ? `✅ ${state.selected.length}/${idealAds} позицій (${backupCount} запасн.) · ритм ${rhythmText}`
+        : `✅ ${state.selected.length}/${idealAds} позицій · ритм ${rhythmText}`)
       : `⚠️ 0 місць! Зменш "Мін. паузу" або збільш "Поріг"`,
     state.selected.length > 0 ? 'success' : 'warn'
   );

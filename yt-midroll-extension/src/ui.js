@@ -595,8 +595,8 @@ function createPanel() {
       ${row('Реклама кожні (с):', stepper('mra-min-gap', 120, 1, 7200, 1), 'Ручний ритм: мітка приблизно кожні N секунд у найближчій паузі')}
       ${row('Гнучкість ритму (±%):', stepper('mra-flex', 50, 10, 90, 5), 'Наскільки далеко від ритму можна зміститись заради паузи.\\n±50% від інтервалу = стандарт.\\nМенше = суворий ритм, більше = пріоритет паузам')}
       ${row('Мін. якість паузи (%):', stepper('mra-min-quality', 0, 0, 90, 5), '0 = будь-яка тиша\\n70+ = лише «добрі» паузи (межа прийняття YouTube)\\n78+ = лише «люкс»\\nПаузи нижче фільтра ігноруються — замість них спрацюють запасні (якщо увімкнені)')}
-      ${row('Пропустити початок (с):', stepper('mra-start-skip', 10, 0, 600, 5), 'Не ставити рекламу в перші N секунд відео')}
-      ${row('Пропустити кінець (с):', stepper('mra-end-skip', 15, 0, 600, 5), 'Не ставити рекламу в останні N секунд відео')}
+      ${row('Пропустити початок (с):', stepper('mra-start-skip', 40, 0, 600, 5), 'Не ставити рекламу в перші N секунд відео')}
+      ${row('Пропустити кінець (с):', stepper('mra-end-skip', 45, 0, 600, 5), 'Не ставити рекламу в останні N секунд відео')}
     </div>
   </div>
 
@@ -613,7 +613,7 @@ function createPanel() {
       </div>
       <div class="mtw" style="margin-top:6px;">
         <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
-        <label class="mtl" for="mra-focus-start" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 Більше реклами на початку (x2 буст)</label>
+        <label class="mtl" for="mra-focus-start" style="color:#ffffff;opacity:0.85;font-weight:500;">🎯 AVD-хвиля: густіше на старті (70→130→165с)</label>
       </div>
       <div class="mtw" style="margin-top:6px;">
         <label class="mt"><input type="checkbox" id="mra-auto-open" checked><span class="msl"></span></label>

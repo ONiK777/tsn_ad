@@ -478,9 +478,7 @@ function renderWaveform() {
   }
 
   if (state.selected.length > 0) {
-    const idealGap = CONFIG.autoGap
-      ? state.waveformData.duration / Math.max(1, Math.floor(state.waveformData.duration / 120))
-      : CONFIG.minGapSec;
+    const baseGap = CONFIG.autoGap ? 120 : (CONFIG.minGapSec || 120);
     const zoneBoundaries = [0, ...state.selected.map(s => s.seconds), duration];
 
     for (let z = 0; z < zoneBoundaries.length - 1; z++) {
@@ -488,6 +486,9 @@ function renderWaveform() {
       const visibleStart = Math.max(zoneBoundaries[z], view.start);
       const visibleEnd = Math.min(zoneBoundaries[z + 1], view.end);
       if (visibleEnd <= visibleStart) continue;
+
+      const zoneMid = (zoneBoundaries[z] + zoneBoundaries[z + 1]) / 2;
+      const idealGap = (typeof getIdealAdGapAt === 'function') ? getIdealAdGapAt(zoneMid, baseGap) : baseGap;
 
       const x1 = timeToX(visibleStart);
       const x2 = timeToX(visibleEnd);

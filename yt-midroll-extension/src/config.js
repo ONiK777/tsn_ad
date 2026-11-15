@@ -5,8 +5,8 @@ var CONFIG = {
   rhythmFlexPct: 50,   // Гнучкість ритму: ±% від інтервалу при пошуку паузи (ручний режим)
   minQualityPct: 0,    // Мінімальна якість паузи, % (ручний режим; 0 = будь-яка тиша)
   fallbackMinQualityPct: 35, // Мінімальна якість запасної мітки, %: якщо навіть найтихіше місце вікна слабше — слот пропускається, щоб YT не позначав мітку
-  startOffsetSec: 10,  // Не ставити рекламу в перші N секунд
-  endOffsetSec: 15,    // Не ставити рекламу в останні N секунд
+  startOffsetSec: 40,  // Не ставити рекламу в перші N секунд
+  endOffsetSec: 45,    // Не ставити рекламу в останні N секунд
   minGapSec: 120,
   shortVideoCutoff: 600,
   longVideoGapSec: 120,
@@ -18,6 +18,19 @@ var CONFIG = {
   fullAutoInsert: false, // Нуль кліків: відкрив редактор без міток → бот сам аналізує, вставляє і зберігає
   preserveManualMarks: false,
 };
+
+// 3-зонна модель AVD: густий старт (00:40–05:30) → друге вікно (05:30–10:00) → догляд (10:00+)
+function getIdealAdGapAt(timeSec, baseGap = 120) {
+  if (!CONFIG.focusStart) return baseGap;
+  if (CONFIG.autoGap) {
+    if (timeSec < 330) return 70;   // 00:00 – 05:30: пікова щільність (60–75с)
+    if (timeSec < 600) return 130;  // 05:30 – 10:00: друге вікно (120–150с)
+    return 165;                     // 10:00+: зона догляду (150–180с)
+  }
+  if (timeSec < 330) return Math.max(30, baseGap * 0.6);
+  if (timeSec < 600) return baseGap * 1.05;
+  return baseGap * 1.35;
+}
 
 // ─── СТАН ────────────────────────────────────────────────────────────────────
 var state = {
