@@ -242,17 +242,24 @@ function findQuietestSpot(smoothed, secPerBlock, fromSec, toSec, spanSec) {
 // Жадібний прохід дивиться лише на поточне вікно; DP підбирає НАБІР міток,
 // найкращий по всьому відео одразу. Чиста функція — без стану, легко тестується.
 // cands: [{seconds, quality_score, duration_sec}] (відсортовані за часом, вже відфільтровані за якістю)
-// opts: { duration, gap, idealGapAt(t), flex, flexWide, startOffset, endOffset, minS }
+// opts: { duration, gap, idealGapAt(t), flex, flexWide, startOffset, endOffset, minS, segStart, segEnd, targetCount }
 // Повертає масив індексів вибраних кандидатів (зростаючий) або null, якщо план не знайдено.
 function dpPlanMarks(cands, opts) {
   let n = cands.length;
   if (!n) return null;
 
-  // Фільтруємо кандидатів, що виходять за кінцеву захисну зону
+  const segStart = typeof opts.segStart === 'number' ? opts.segStart : 0;
+  const segEnd = typeof opts.segEnd === 'number' ? opts.segEnd : opts.duration;
+  const targetCount = typeof opts.targetCount === 'number' ? opts.targetCount : 0;
+  const minTime = Math.max(opts.startOffset, segStart);
+  const maxTime = Math.min(opts.duration - opts.endOffset, segEnd);
+
+  // Фільтруємо кандидатів у межах [minTime, maxTime]
   const filtered = [];
   const origIdx = [];
   for (let i = 0; i < n; i++) {
-    if (cands[i].seconds <= opts.duration - opts.endOffset) {
+    const t = cands[i].seconds;
+    if (t >= minTime && t <= maxTime) {
       filtered.push(cands[i]);
       origIdx.push(i);
     }
@@ -274,13 +281,14 @@ function dpPlanMarks(cands, opts) {
     n = 800;
   }
 
-  const g0 = opts.idealGapAt(0);
+  const g0 = opts.idealGapAt(segStart);
 
   // Максимальна кількість міток (оцінка зверху)
-  const K = Math.max(1, Math.ceil(
-    (opts.duration - opts.startOffset - opts.endOffset) /
+  const estK = Math.max(1, Math.ceil(
+    Math.max(0, maxTime - minTime) /
     Math.max(opts.gap * (1 - opts.flex), 1)
   ) + 1);
+  const K = targetCount > 0 ? Math.max(estK, targetCount + 2) : estK;
 
   // Захист від вибуху складності
   if (n * K > 600_000) return null;
@@ -300,8 +308,8 @@ function dpPlanMarks(cands, opts) {
   // Перевірка дозволеності першої мітки
   const allowedFirst = (j) => {
     const t = workCands[j].seconds;
-    if (t < opts.startOffset) return false;
-    if (t > g0 * (1 + opts.flexWide)) return false;
+    if (t < minTime) return false;
+    if ((t - segStart) > g0 * (1 + opts.flexWide)) return false;
     return true;
   };
 
@@ -324,7 +332,7 @@ function dpPlanMarks(cands, opts) {
   // k=1 (перші мітки, індекс 0-based = k-1 = 0)
   for (let j = 0; j < n; j++) {
     if (!allowedFirst(j)) continue;
-    const d = workCands[j].seconds;
+    const d = workCands[j].seconds - segStart;
     dp[0 * n + j] = value(workCands[j]) - pen(d, g0);
   }
 
@@ -356,8 +364,16 @@ function dpPlanMarks(cands, opts) {
   let bestJ = -1;
   for (let k = 0; k < K; k++) {
     for (let j = 0; j < n; j++) {
-      if (dp[k * n + j] > bestScore) {
-        bestScore = dp[k * n + j];
+      if (dp[k * n + j] <= NEG_INF / 2) continue;
+      let finalScore = dp[k * n + j];
+      if (targetCount > 0) {
+        const count = k + 1;
+        const over = Math.max(0, count - targetCount);
+        const under = Math.max(0, targetCount - count);
+        finalScore -= over * over * 8.0 + under * under * 2.5;
+      }
+      if (finalScore > bestScore) {
+        bestScore = finalScore;
         bestK = k;
         bestJ = j;
       }
@@ -587,37 +603,46 @@ async function _doAnalyze() {
   // те саме на будь-якому рівні драбини — і калібрування за вердиктами YT не пливе.
   const QUALITY_REF = Math.max(avgAbs * 0.35, 0.000001);
 
-  // Локальна опора якості: враховує локальну гучність активного мовлення у вікні ±45с
+  // Локальна опора якості та адаптивного порогу: враховує локальну гучність мовлення
   const BIN_SEC = 5;
   const numBins = Math.max(1, Math.ceil(duration / BIN_SEC));
-  const activeThreshold = avgAbs * 0.25;
-  const binSum = new Float64Array(numBins);
-  const binCount = new Int32Array(numBins);
+  const binSpeech = new Float64Array(numBins);
 
-  for (let b = 0; b < totalBlocks; b++) {
-    const val = smoothed[b];
-    if (val >= activeThreshold) {
-      const bin = Math.min(numBins - 1, Math.floor((b * secPerBlock) / BIN_SEC));
-      binSum[bin] += val;
-      binCount[bin]++;
+  for (let bin = 0; bin < numBins; bin++) {
+    const startB = Math.floor((bin * BIN_SEC) / secPerBlock);
+    const endB = Math.min(totalBlocks, Math.floor(((bin + 1) * BIN_SEC) / secPerBlock));
+    const vals = [];
+    for (let b = startB; b < endB; b++) {
+      const v = smoothed[b];
+      if (v > 0.0001) vals.push(v);
+    }
+    if (vals.length > 0) {
+      vals.sort((a, b) => a - b);
+      const idx = Math.min(vals.length - 1, Math.floor(vals.length * 0.70));
+      binSpeech[bin] = vals[idx];
+    } else {
+      binSpeech[bin] = 0;
     }
   }
 
-  const prefSum = new Float64Array(numBins + 1);
-  const prefCount = new Int32Array(numBins + 1);
+  const prefSpeechSum = new Float64Array(numBins + 1);
+  const prefSpeechValid = new Int32Array(numBins + 1);
   for (let i = 0; i < numBins; i++) {
-    prefSum[i + 1] = prefSum[i] + binSum[i];
-    prefCount[i + 1] = prefCount[i] + binCount[i];
+    prefSpeechSum[i + 1] = prefSpeechSum[i] + binSpeech[i];
+    prefSpeechValid[i + 1] = prefSpeechValid[i] + (binSpeech[i] > 0 ? 1 : 0);
   }
 
-  const getQualityRefAt = (sec) => {
+  const getLocalSpeechAt = (sec) => {
     const binIdx = Math.max(0, Math.min(numBins - 1, Math.floor((sec || 0) / BIN_SEC)));
     const halfWin = 9; // ±45с (9 * 5с)
     const fromBin = Math.max(0, binIdx - halfWin);
     const toBin = Math.min(numBins, binIdx + halfWin + 1);
-    const cnt = prefCount[toBin] - prefCount[fromBin];
-    const localAvg = cnt > 0 ? (prefSum[toBin] - prefSum[fromBin]) / cnt : avgAbs;
-    return Math.max(localAvg * 0.35, avgAbs * 0.15, 0.000001);
+    const validCnt = prefSpeechValid[toBin] - prefSpeechValid[fromBin];
+    return validCnt > 0 ? (prefSpeechSum[toBin] - prefSpeechSum[fromBin]) / validCnt : avgAbs;
+  };
+
+  const getQualityRefAt = (sec) => {
+    return Math.max(getLocalSpeechAt(sec) * 0.35, avgAbs * 0.08, 0.000001);
   };
 
   // Поточна межа прийняття YT (може бути самонавчена, або дефолт 0.70)
@@ -659,6 +684,12 @@ async function _doAnalyze() {
     const thresholdFromMean = avgAbs * (thresholdPct / 100);
     const thresholdFromPercentile = getPercentile(smoothed, Math.max(0.01, Math.min(0.99, thresholdPct / 100)));
     const GLOBAL_THRESHOLD = Math.max(thresholdFromMean, thresholdFromPercentile);
+
+    const localThrByBin = new Float64Array(numBins);
+    for (let bin = 0; bin < numBins; bin++) {
+      const rawLocalThr = getLocalSpeechAt((bin + 0.5) * BIN_SEC) * (thresholdPct / 100);
+      localThrByBin[bin] = Math.max(GLOBAL_THRESHOLD * 0.2, Math.min(GLOBAL_THRESHOLD * 2.2, rawLocalThr));
+    }
 
     let currentSilenceStart = null;
     const rawSilences = [];
@@ -708,17 +739,24 @@ async function _doAnalyze() {
         const paddedMaxStart = endBlock - idealBlocks - rightPadBlocks;
 
         if (paddedMaxStart >= paddedMinStart) {
+          const attackCheckB = Math.max(1, Math.round(0.35 / secPerBlock));
           let pRollingSum = 0;
           for (let j = paddedMinStart; j < paddedMinStart + idealBlocks; j++) pRollingSum += smoothed[j];
-          let paddedAvg = pRollingSum / idealBlocks;
+          let initialAvg = pRollingSum / idealBlocks;
+          let initialRightMax = smoothed[Math.min(endBlock - 1, paddedMinStart + idealBlocks + Math.floor(attackCheckB / 2))];
+          let bestScore = initialAvg + 0.15 * initialRightMax;
           let paddedStart = paddedMinStart;
+          let paddedAvg = initialAvg;
 
           for (let start = paddedMinStart + 1; start <= paddedMaxStart; start++) {
             pRollingSum += smoothed[start + idealBlocks - 1] - smoothed[start - 1];
             const avg = pRollingSum / idealBlocks;
-            if (avg < paddedAvg) {
-              paddedAvg = avg;
+            const rightMax = smoothed[Math.min(endBlock - 1, start + idealBlocks + Math.floor(attackCheckB / 2))];
+            const score = avg + 0.15 * rightMax;
+            if (score < bestScore) {
+              bestScore = score;
               paddedStart = start;
+              paddedAvg = avg;
             }
           }
 
@@ -751,7 +789,8 @@ async function _doAnalyze() {
     };
 
     for (let b = 0; b < totalBlocks; b++) {
-      const isQuiet = smoothed[b] < GLOBAL_THRESHOLD;
+      const bin = Math.min(numBins - 1, Math.floor((b * secPerBlock) / BIN_SEC));
+      const isQuiet = smoothed[b] < localThrByBin[bin];
 
       if (isQuiet && currentSilenceStart === null) {
         currentSilenceStart = b;
@@ -815,323 +854,9 @@ async function _doAnalyze() {
     return { rawSilences, threshold: GLOBAL_THRESHOLD };
   };
 
-  // Розстановка міток за ритмом gap по знайдених паузах
-  const runSelection = (rawSilences, minS) => {
-    // ── Якорі: якщо увімкнено збереження ручних міток (Smart Top-Up),
-    //    беремо їх як якорі й не ставимо рекламу впритул до них ──
-    const anchors = (CONFIG.preserveManualMarks && Array.isArray(state.existingMarks) && state.existingMarks.length > 0)
-      ? state.existingMarks
-      : [];
-    const nearAnchor = (sec) => anchors.some(m => Math.abs(m.seconds - sec) < (anchors.length ? Math.max(15, gap * 0.35) : 3));
-
-    const selectedCands = [];
-    const usedPauses = new Set();
-    const usedHints = new Set();
-    const sortedSilences = [...rawSilences].sort((a, b) => a.seconds - b.seconds);
-
-    // ── Глобальний план (DP): найкращий набір міток по всьому відео ──
-    // У режимі дозаповнення ручних міток DP вимикаємо — працює жадібне заповнення прогалин
-    let preferred = [];
-    if (!anchors.length) {
-      try {
-        const dpCands = [];
-        // Підказки YT — найсильніші кандидати (0.95), далі природні паузи що проходять межу
-        for (const hs of ytHints) {
-          if (hs >= startOffset && hs <= duration - endOffset) {
-            dpCands.push({ seconds: hs, quality_score: 0.95, duration_sec: 0, _hint: true });
-          }
-        }
-        for (const p of sortedSilences) {
-          if (Number(p.quality_score ?? 0) < qualityFloor) continue;
-          // Природну паузу впритул до підказки YT не дублюємо — підказка головніша
-          if (dpCands.some(c => c._hint && Math.abs(c.seconds - p.seconds) < 1.5)) continue;
-          dpCands.push({ seconds: p.seconds, quality_score: Number(p.quality_score ?? 0), duration_sec: Number(p.duration_sec) || 0, _src: p });
-        }
-        dpCands.sort((a, b) => a.seconds - b.seconds);
-        const idealGapAt = (t) => {
-          if (!CONFIG.focusStart) return gap;
-          const g = gap * (0.5 + (t / duration) * 0.5);
-          return CONFIG.autoGap ? g * 1.386 : g;
-        };
-        const maxIdealGap = CONFIG.focusStart && CONFIG.autoGap ? gap * 1.386 : gap;
-        const minIdealGap = CONFIG.focusStart ? gap * 0.5 * (CONFIG.autoGap ? 1.386 : 1) : gap;
-        const planIdx = dpPlanMarks(dpCands, {
-          duration,
-          gap,
-          idealGapAt,
-          maxIdealGap,
-          minIdealGap,
-          flex,
-          flexWide,
-          startOffset,
-          endOffset,
-          minS
-        });
-        if (planIdx && planIdx.length) {
-          preferred = planIdx.map(i => dpCands[i]);
-          log(`🧠 Глобальний план (DP): ${preferred.length} позицій (підказок YT: ${preferred.filter(c => c._hint).length})`, 'info');
-        }
-      } catch (e) {
-        console.warn('[TSN ANALYZER] DP-планувальник впав, працює жадібний прохід:', e);
-        preferred = [];
-      }
-    }
-
-    let playhead = 0;
-
-  while (true) {
-    let currentGap = gap;
-    if (CONFIG.focusStart) {
-      const pos = playhead / duration;
-      // Буст x2 на початку: від gap*0.5 (початок) до gap*1.0 (кінець)
-      // pos=0 → target вдвічі ближче, тому паузи ставляться частіше
-      // pos=1 → звичайна відстань
-      currentGap = gap * (0.5 + pos * 0.5);
-      // Авто-пілот: буст лише ПЕРЕРОЗПОДІЛЯЄ щільність (частіше на початку,
-      // рідше в кінці), а сумарна кількість тримається ≈ цілі idealAds.
-      // 2·ln2 ≈ 1.386 — нормування середньої щільності буста до 1/gap.
-      if (CONFIG.autoGap) currentGap *= 1.386;
-    }
-
-    let target = playhead + currentGap;
-
-    // Не ставимо рекламу в захисну зону наприкінці відео
-    if (target > duration - endOffset) break;
-
-    // Smart Top-Up: якщо в поточному слоті є збережена ручна мітка — стрибаємо на неї
-    if (anchors.length > 0) {
-      const matchingAnchors = anchors
-        .filter(m => m.seconds > playhead + 3 && m.seconds <= target + currentGap * 0.25)
-        .sort((a, b) => a.seconds - b.seconds);
-      if (matchingAnchors.length > 0) {
-        playhead = matchingAnchors[0].seconds;
-        continue;
-      }
-    }
-
-    // Вікно пошуку ±flex від gap — при 50% вікна стикуються без мертвих зон
-    const windowStart = target - (currentGap * flex);
-    const windowEnd = target + (currentGap * flex);
-
-    let bestPause = null;
-    let bestScore = -Infinity;
-
-    // Пріоритет №0: позиція з глобального плану (DP) у поточному вікні —
-    // план уже зважив усе відео цілком, локальний вибір його не переб'є
-    if (preferred.length) {
-      let bestPref = null, bestPrefDist = Infinity;
-      for (const c of preferred) {
-        if (c._used || c.seconds < windowStart || c.seconds > windowEnd) continue;
-        if (nearAnchor(c.seconds)) continue;
-        const d = Math.abs(c.seconds - target);
-        if (d < bestPrefDist) { bestPrefDist = d; bestPref = c; }
-      }
-      // Якщо в [windowStart, windowEnd] немає — шукаємо в повному переході DP [playhead + minTrans, playhead + maxTrans]
-      if (!bestPref) {
-        const dpRangeStart = playhead + Math.max(3, currentGap * (1 - flex));
-        const dpRangeEnd = playhead + currentGap * (1 + flexWide);
-        for (const c of preferred) {
-          if (c._used || c.seconds < dpRangeStart || c.seconds > dpRangeEnd) continue;
-          if (nearAnchor(c.seconds)) continue;
-          bestPref = c;
-          break; // беремо першу найближчу в дозволеному DP інтервалі
-        }
-      }
-      if (bestPref) {
-        bestPref._used = true;
-        if (bestPref._hint) {
-          usedHints.add(bestPref.seconds);
-          bestPause = { timecode: toTimecode(bestPref.seconds), seconds: +bestPref.seconds.toFixed(2), duration_sec: 0, ideal_duration_sec: 0, amplitude: 0, avg_amplitude: 0, best_avg_amplitude: 0, max_amplitude: 0, quality_score: 0.95, quality_label: 'підказка YT', ytHint: true };
-        } else if (bestPref._src && !usedPauses.has(bestPref._src)) {
-          usedPauses.add(bestPref._src);
-          bestPause = bestPref._src;
-        }
-      }
-    }
-    // Запам'ятовуємо, чи мітка прийшла з DP-плану (тоді апгрейд не потрібен)
-    const fromPlan = !!bestPause;
-
-    // Пріоритет №1: підказка YouTube у вікні — це місце YT гарантовано вважає
-    // природним і не позначить червоним
-    if (!bestPause && ytHints.length) {
-      let bestHint = null, bestHintDist = Infinity;
-      for (const hs of ytHints) {
-        if (hs < windowStart || hs > windowEnd || usedHints.has(hs)) continue;
-        if (nearAnchor(hs)) continue;
-        const d = Math.abs(hs - target);
-        if (d < bestHintDist) { bestHintDist = d; bestHint = hs; }
-      }
-      if (bestHint !== null) {
-        usedHints.add(bestHint);
-        bestPause = {
-          timecode: toTimecode(bestHint),
-          seconds: +bestHint.toFixed(2),
-          duration_sec: 0,
-          ideal_duration_sec: 0,
-          amplitude: 0, avg_amplitude: 0, best_avg_amplitude: 0, max_amplitude: 0,
-          quality_score: 0.95,
-          quality_label: 'підказка YT',
-          ytHint: true
-        };
-      }
-    }
-
-    // Скоринг власних пауз — лише якщо підказки YT у вікні немає
-    for (const p of (bestPause ? [] : sortedSilences)) {
-      if (usedPauses.has(p)) continue;
-
-      // Якщо пауза потрапляє у "вікно"
-      if (p.seconds >= windowStart && p.seconds <= windowEnd) {
-        // Фільтр мінімальної якості (експертний режим)
-        const qualityScore = Number(p.quality_score ?? 0);
-        if (qualityScore < qualityFloor) continue;
-        if (nearAnchor(p.seconds)) continue;
-
-        const distance = Math.abs(p.seconds - target);
-        const distancePenalty = Math.pow(distance / (currentGap * flex), 2);
-
-        // Оцінюємо якість: найтихіші паузи вище, але без сильного відхилення від потрібного інтервалу.
-        const durationBonus = Math.min(Number(p.duration_sec) || 0, minS * 3) / minS;
-        const score = qualityScore * 10 + durationBonus * 0.4 - distancePenalty * 2;
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestPause = p;
-        }
-      }
-    }
-
-    // "Тільки ідеальні": якщо найкраща пауза у вікні слабша за межу прийняття YouTube,
-    // шукаємо трохи ширше паузу рівня «добра/люкс» — невелике зміщення ритму
-    // краще за рекламу в сумнівній напівпаузі.
-    // Якщо мітка вже вибрана DP-планом — апгрейд не потрібен, план вже зважив усе відео.
-    const upgradeFloor = Math.max(ytAccept, qualityFloor);
-    if (!fromPlan && bestPause && Number(bestPause.quality_score ?? 0) < upgradeFloor) {
-      const wideStart = Math.max(playhead + currentGap * 0.4, startOffset);
-      const wideEnd = Math.min(target + currentGap * flexWide, duration - endOffset);
-      let upgrade = null;
-      let upgradeScore = -Infinity;
-
-      for (const p of sortedSilences) {
-        if (usedPauses.has(p) || p.seconds < wideStart || p.seconds > wideEnd) continue;
-        const q = Number(p.quality_score ?? 0);
-        if (q < upgradeFloor) continue;
-        if (nearAnchor(p.seconds)) continue;
-
-        const distance = Math.abs(p.seconds - target);
-        const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
-        const score = q * 10 - distancePenalty * 2;
-        if (score > upgradeScore) {
-          upgradeScore = score;
-          upgrade = p;
-        }
-      }
-
-      if (upgrade) {
-        log(`✨ Апгрейд паузи: ${bestPause.timecode} (${Math.round((bestPause.quality_score ?? 0) * 100)}%) → ${upgrade.timecode} (${Math.round((upgrade.quality_score ?? 0) * 100)}%)`, 'info');
-        bestPause = upgrade;
-      }
-    }
-
-    // Fallback: ширше вікно вперед
-    if (!bestPause) {
-      const looseEnd = target + currentGap * flexWide;
-      let fallbackScore = -Infinity;
-
-      for (const p of sortedSilences) {
-        if (usedPauses.has(p) || p.seconds < windowStart || p.seconds > looseEnd) continue;
-        if (Number(p.quality_score ?? 0) < qualityFloor) continue;
-        if (nearAnchor(p.seconds)) continue;
-
-        const distance = Math.abs(p.seconds - target);
-        const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
-        const score = Number(p.quality_score ?? 0) * 10 - distancePenalty;
-
-        if (score > fallbackScore) {
-          fallbackScore = score;
-          bestPause = p;
-        }
-      }
-    }
-
-    // Режим "Без пропусків": пауз у вікні немає → запасна мітка в найтихішому місці вікна.
-    // Ритм реклами (стандарт ~1/2хв) тримається навіть без чистої тиші.
-    if (!bestPause && CONFIG.guaranteeStandard) {
-      const spot = findQuietestSpot(
-        smoothed, secPerBlock,
-        Math.max(windowStart, startOffset),
-        Math.min(windowEnd, duration - endOffset),
-        Math.max(0.8, Math.min(minS, 2))
-      );
-      const farEnough = spot && !selectedCands.some(c => Math.abs(c.seconds - spot.centerSec) < 3) && !nearAnchor(spot.centerSec);
-      if (farEnough) {
-        // Якість запасної — ТІЄЮ Ж формулою, що й природні паузи (одна лінійка):
-        // ядро тиші, середня (reuse coreQuiet — spot має лише одне avg), піки, контраст
-        // з оточенням, тривалість. Інакше запасні виглядали б кращими за природні через
-        // простішу формулу.
-        const spotLen = Math.max(0.8, Math.min(minS, 2)); // та сама довжина, що передана у findQuietestSpot
-        const qRef = getQualityRefAt(spot.centerSec);
-        const coreQuiet = clamp01((qRef - spot.avgAmp) / qRef);
-        const peakClean = clamp01((qRef - (spot.maxAmp ?? spot.avgAmp)) / qRef);
-        const durationFit = clamp01(spotLen / Math.max((CONFIG.minSilenceSec ?? 1.5) * 2, 0.001));
-        // avgQuiet: spot має лише одне avg, тому reuse coreQuiet для 0.15-терму середньої
-        const contrast = spot.surroundAvg > 0 ? clamp01(1 - spot.avgAmp / spot.surroundAvg) : 0;
-        const relQuiet = clamp01(coreQuiet * 0.45 + coreQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
-
-        // «Без пропусків» тепер не означає «за будь-яку ціну»: якщо навіть найтихіше
-        // місце вікна занадто гучне (тихо-в-тихому без реального провалу відносно
-        // оточення), YouTube таку мітку позначає попередженням «реклама навряд чи
-        // показуватиметься». Такий слот краще чесно пропустити (playhead коректно
-        // просунеться далі нижче), ніж заздалегідь ставити «биту» мітку.
-        const fallbackFloor = Math.max(0, Math.min(0.9, (CONFIG.fallbackMinQualityPct ?? 35) / 100));
-        if (relQuiet < fallbackFloor) {
-          log(`🛟 Найтихіше місце вікна ${toTimecode(windowStart)}–${toTimecode(windowEnd)} занадто гучне (${Math.round(relQuiet * 100)}% < поріг ${Math.round(fallbackFloor * 100)}%) — запасну не ставлю, слот пропускаю`, 'warn');
-        } else {
-          bestPause = {
-            timecode: toTimecode(spot.centerSec),
-            seconds: +spot.centerSec.toFixed(2),
-            duration_sec: 0,
-            ideal_duration_sec: 0,
-            amplitude: +spot.avgAmp.toFixed(4),
-            avg_amplitude: +spot.avgAmp.toFixed(4),
-            best_avg_amplitude: +spot.avgAmp.toFixed(4),
-            max_amplitude: +(spot.maxAmp ?? spot.avgAmp).toFixed(4),
-            quality_score: +relQuiet.toFixed(3),
-            quality_label: 'запасна',
-            fallbackSpot: true
-          };
-          log(`🛟 Пауз немає у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)} → запасна в найтихішому місці: ${bestPause.timecode} (${Math.round(relQuiet * 100)}%)`, 'warn');
-        }
-      }
-    }
-
-    // Якщо НІЧОГО не знайдено — просуваємо playhead рівно на currentGap
-    // ⚠️ КРИТИЧНО: playhead = target (а не target + 0.5*gap!)
-    // Це гарантує що наступне вікно ПОЧИНАЄТЬСЯ там де ЗАКІНЧИЛОСЬ поточне
-    // і між вікнами НЕМАЄ мертвих зон куди можуть падати паузи!
-    if (!bestPause) {
-      playhead = target; // = playhead + currentGap → вікна стикуються ідеально
-      if (playhead > duration - endOffset) break;
-      log(`⚠️ Не знайдено паузи у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)}, слот пропущено`, 'warn');
-      continue;
-    }
-
-    // Додаємо відібрану паузу (тільки реальна тиша)
-    if (bestPause.seconds < duration - endOffset) {
-      selectedCands.push(bestPause);
-      usedPauses.add(bestPause);
-      playhead = bestPause.seconds;
-    } else {
-      break;
-    }
-  }
-
-    return selectedCands;
-  };
-
   // ── Зчитуємо мітки, що вже стоять на відео (до запуску планувальника).
   //    Аналіз НІЧОГО не змінює на відео.
-  //    Ручні мітки — лише інформаційно (вони будуть знесені при вставці).
+  //    Ручні мітки — лише інформаційно (вони будуть знесені при вставці, або збережені при Smart Top-Up).
   //    Авто-мітки YT запам'ятовуємо як 100%-якорі: при вставці чекбокс знімається
   //    і вони зникають, тому включаємо їх у план заздалегідь. ──
   state.existingMarks = readExistingAdBreaks();
@@ -1146,6 +871,461 @@ async function _doAnalyze() {
       log(`📌 На відео вже стоїть ${state.existingMarks.length} ручних міток (інформаційно — при вставці будуть знесені)`, 'info');
     }
   }
+
+  // Розстановка міток за ритмом gap по знайдених паузах
+  const runSelection = (rawSilences, minS) => {
+    // ── Якорі: якщо увімкнено збереження ручних міток (Smart Top-Up),
+    //    беремо їх як якорі й не ставимо рекламу впритул до них ──
+    const anchors = (CONFIG.preserveManualMarks && Array.isArray(state.existingMarks) && state.existingMarks.length > 0)
+      ? state.existingMarks
+      : [];
+    const ytAutoList = state.ytAutoMarks || [];
+    const autoMinSpace = Math.max(15, gap * 0.35);
+    const nearAnchor = (sec) => anchors.some(m => Math.abs(m.seconds - sec) < (anchors.length ? autoMinSpace : 3));
+    const nearYtAuto = (sec) => ytAutoList.some(m => Math.abs(m.seconds - sec) < autoMinSpace);
+    const outroGuardStart = duration >= 1800 ? Math.max(startOffset, duration - Math.max(endOffset, 60)) : Infinity;
+
+    const selectedCands = [];
+    const usedPauses = new Set();
+    const usedHints = new Set();
+    const usedAuto = new Set();
+    const sortedSilences = [...rawSilences].sort((a, b) => a.seconds - b.seconds);
+
+    // ── Глобальний план (DP): найкращий набір міток по всьому відео ──
+    const idealGapAt = (t) => {
+      if (!CONFIG.focusStart) return gap;
+      const g = gap * (0.5 + (t / duration) * 0.5);
+      return CONFIG.autoGap ? g * 1.386 : g;
+    };
+    const maxIdealGap = CONFIG.focusStart && CONFIG.autoGap ? gap * 1.386 : gap;
+    const minIdealGap = CONFIG.focusStart ? gap * 0.5 * (CONFIG.autoGap ? 1.386 : 1) : gap;
+
+    let preferred = [];
+    try {
+      const dpCands = [];
+      // Авто-мітки YT — найвищі кандидати (0.98), беремо їх у план як якорі
+      for (const am of ytAutoList) {
+        if (am.seconds >= startOffset && am.seconds <= duration - endOffset) {
+          dpCands.push({
+            seconds: am.seconds,
+            timecode: am.timecode,
+            quality_score: 0.98,
+            duration_sec: 0,
+            _ytAuto: true
+          });
+        }
+      }
+      // Підказки YT (0.95): якщо поруч немає авто-мітки YT
+      for (const hs of ytHints) {
+        if (hs >= startOffset && hs <= duration - endOffset) {
+          if (!nearYtAuto(hs)) {
+            dpCands.push({ seconds: hs, quality_score: 0.95, duration_sec: 0, _hint: true });
+          }
+        }
+      }
+      // Власні природні паузи: не ставимо ближче ніж autoMinSpace до авто-мітки YT
+      for (const p of sortedSilences) {
+        if (Number(p.quality_score ?? 0) < qualityFloor) continue;
+        if (nearYtAuto(p.seconds)) continue;
+        if (dpCands.some(c => c._hint && Math.abs(c.seconds - p.seconds) < 1.5)) continue;
+        dpCands.push({
+          seconds: p.seconds,
+          quality_score: Number(p.quality_score ?? 0),
+          duration_sec: Number(p.duration_sec) || 0,
+          _src: p
+        });
+      }
+      dpCands.sort((a, b) => a.seconds - b.seconds);
+
+      if (!anchors.length) {
+        const planIdx = dpPlanMarks(dpCands, {
+          duration,
+          gap,
+          idealGapAt,
+          maxIdealGap,
+          minIdealGap,
+          flex,
+          flexWide,
+          startOffset,
+          endOffset,
+          minS,
+          targetCount: idealAds,
+          segStart: 0,
+          segEnd: duration
+        });
+        if (planIdx && planIdx.length) {
+          preferred = planIdx.map(i => dpCands[i]);
+          log(`🧠 Глобальний план (DP): ${preferred.length} позицій (підказок YT: ${preferred.filter(c => c._hint).length}, авто YT: ${preferred.filter(c => c._ytAuto).length})`, 'info');
+        }
+      } else {
+        // Smart Top-Up: запускаємо DP окремо для кожного великого проміжку між якорями
+        const sortedAnchorTimes = anchors.map(a => a.seconds).sort((a, b) => a - b);
+        const boundaries = [0, ...sortedAnchorTimes, duration];
+        const minSpace = Math.max(15, gap * 0.35);
+
+        for (let bIdx = 0; bIdx < boundaries.length - 1; bIdx++) {
+          const aLeft = boundaries[bIdx];
+          const aRight = boundaries[bIdx + 1];
+          const span = aRight - aLeft;
+          if (span < gap * 1.6) continue;
+
+          const segStart = aLeft;
+          const segEnd = aRight;
+          const segMinT = Math.max(startOffset, aLeft + minSpace);
+          const segMaxT = Math.min(duration - endOffset, aRight - minSpace);
+          if (segMaxT <= segMinT) continue;
+
+          const segCands = dpCands.filter(c => c.seconds >= segMinT && c.seconds <= segMaxT);
+          if (!segCands.length) continue;
+
+          const rawTarget = Math.round(span / gap) - (aLeft > 0 && aRight < duration ? 1 : 0);
+          const targetCount = Math.max(1, rawTarget);
+
+          const planIdx = dpPlanMarks(segCands, {
+            duration,
+            gap,
+            idealGapAt,
+            maxIdealGap,
+            minIdealGap,
+            flex,
+            flexWide,
+            startOffset,
+            endOffset,
+            minS,
+            targetCount,
+            segStart,
+            segEnd
+          });
+          if (planIdx && planIdx.length) {
+            for (const i of planIdx) {
+              preferred.push(segCands[i]);
+            }
+          }
+        }
+        if (preferred.length) {
+          preferred.sort((a, b) => a.seconds - b.seconds);
+          log(`🧠 Smart Top-Up DP: ${preferred.length} позицій у проміжках між ручними мітками`, 'info');
+        }
+      }
+    } catch (e) {
+      console.warn('[TSN ANALYZER] DP-планувальник впав, працює жадібний прохід:', e);
+      preferred = [];
+    }
+
+    let playhead = 0;
+
+    while (true) {
+      let currentGap = gap;
+      if (CONFIG.focusStart) {
+        const pos = playhead / duration;
+        currentGap = gap * (0.5 + pos * 0.5);
+        if (CONFIG.autoGap) currentGap *= 1.386;
+      }
+
+      let target = playhead + currentGap;
+      if (target > duration - endOffset) break;
+
+      // Smart Top-Up: якщо в поточному слоті є збережена ручна мітка — стрибаємо на неї
+      if (anchors.length > 0) {
+        const matchingAnchors = anchors
+          .filter(m => m.seconds > playhead + 3 && m.seconds <= target + currentGap * 0.25)
+          .sort((a, b) => a.seconds - b.seconds);
+        if (matchingAnchors.length > 0) {
+          playhead = matchingAnchors[0].seconds;
+          continue;
+        }
+      }
+
+      // Вікно пошуку ±flex від gap — при 50% вікна стикуються без мертвих зон
+      const windowStart = target - (currentGap * flex);
+      const windowEnd = target + (currentGap * flex);
+
+      let bestPause = null;
+      let bestScore = -Infinity;
+
+      // Пріоритет №0: позиція з глобального плану (DP) у поточному вікні —
+      // план уже зважив усе відео цілком, локальний вибір його не переб'є
+      if (preferred.length) {
+        let bestPref = null, bestPrefDist = Infinity;
+        for (const c of preferred) {
+          if (c._used || c.seconds < windowStart || c.seconds > windowEnd) continue;
+          if (nearAnchor(c.seconds)) continue;
+          const d = Math.abs(c.seconds - target);
+          if (d < bestPrefDist) { bestPrefDist = d; bestPref = c; }
+        }
+        // Якщо в [windowStart, windowEnd] немає — шукаємо в повному переході DP [playhead + minTrans, playhead + maxTrans]
+        if (!bestPref) {
+          const dpRangeStart = playhead + Math.max(3, currentGap * (1 - flex));
+          const dpRangeEnd = playhead + currentGap * (1 + flexWide);
+          for (const c of preferred) {
+            if (c._used || c.seconds < dpRangeStart || c.seconds > dpRangeEnd) continue;
+            if (nearAnchor(c.seconds)) continue;
+            bestPref = c;
+            break; // беремо першу найближчу в дозволеному DP інтервалі
+          }
+        }
+        if (bestPref) {
+          bestPref._used = true;
+          if (bestPref._ytAuto) {
+            usedAuto.add(bestPref.seconds);
+            bestPause = {
+              timecode: bestPref.timecode || toTimecode(bestPref.seconds),
+              seconds: +bestPref.seconds.toFixed(2),
+              duration_sec: null,
+              ideal_duration_sec: null,
+              amplitude: null,
+              avg_amplitude: null,
+              best_avg_amplitude: null,
+              max_amplitude: null,
+              quality_score: 1.0,
+              quality_label: 'YT авто',
+              fromYt: true,
+              _ytAuto: true
+            };
+          } else if (bestPref._hint) {
+            usedHints.add(bestPref.seconds);
+            bestPause = {
+              timecode: toTimecode(bestPref.seconds),
+              seconds: +bestPref.seconds.toFixed(2),
+              duration_sec: 0,
+              ideal_duration_sec: 0,
+              amplitude: 0,
+              avg_amplitude: 0,
+              best_avg_amplitude: 0,
+              max_amplitude: 0,
+              quality_score: 0.95,
+              quality_label: 'підказка YT',
+              ytHint: true
+            };
+          } else if (bestPref._src && !usedPauses.has(bestPref._src)) {
+            usedPauses.add(bestPref._src);
+            bestPause = bestPref._src;
+          }
+        }
+      }
+      // Запам'ятовуємо, чи мітка прийшла з DP-плану (тоді апгрейд не потрібен)
+      const fromPlan = !!bestPause;
+
+      // Пріоритет №0.5: авто-мітка YouTube у вікні (якщо не вибрана через DP)
+      if (!bestPause && ytAutoList.length) {
+        let bestAuto = null, bestAutoDist = Infinity;
+        for (const am of ytAutoList) {
+          if (am.seconds < windowStart || am.seconds > windowEnd || usedAuto.has(am.seconds)) continue;
+          if (nearAnchor(am.seconds)) continue;
+          const d = Math.abs(am.seconds - target);
+          if (d < bestAutoDist) { bestAutoDist = d; bestAuto = am; }
+        }
+        if (bestAuto) {
+          usedAuto.add(bestAuto.seconds);
+          bestPause = {
+            timecode: bestAuto.timecode || toTimecode(bestAuto.seconds),
+            seconds: +bestAuto.seconds.toFixed(2),
+            duration_sec: null,
+            ideal_duration_sec: null,
+            amplitude: null,
+            avg_amplitude: null,
+            best_avg_amplitude: null,
+            max_amplitude: null,
+            quality_score: 1.0,
+            quality_label: 'YT авто',
+            fromYt: true,
+            _ytAuto: true
+          };
+        }
+      }
+
+      // Пріоритет №1: підказка YouTube у вікні — це місце YT гарантовано вважає
+      // природним і не позначить червоним
+      if (!bestPause && ytHints.length) {
+        let bestHint = null, bestHintDist = Infinity;
+        for (const hs of ytHints) {
+          if (hs < windowStart || hs > windowEnd || usedHints.has(hs)) continue;
+          if (nearAnchor(hs) || nearYtAuto(hs)) continue;
+          const d = Math.abs(hs - target);
+          if (d < bestHintDist) { bestHintDist = d; bestHint = hs; }
+        }
+        if (bestHint !== null) {
+          usedHints.add(bestHint);
+          bestPause = {
+            timecode: toTimecode(bestHint),
+            seconds: +bestHint.toFixed(2),
+            duration_sec: 0,
+            ideal_duration_sec: 0,
+            amplitude: 0,
+            avg_amplitude: 0,
+            best_avg_amplitude: 0,
+            max_amplitude: 0,
+            quality_score: 0.95,
+            quality_label: 'підказка YT',
+            ytHint: true
+          };
+        }
+      }
+
+      // Скоринг власних пауз — лише якщо підказки YT у вікні немає
+      for (const p of (bestPause ? [] : sortedSilences)) {
+        if (usedPauses.has(p)) continue;
+
+        // Якщо пауза потрапляє у "вікно"
+        if (p.seconds >= windowStart && p.seconds <= windowEnd) {
+          // Фільтр мінімальної якості (експертний режим)
+          const qualityScore = Number(p.quality_score ?? 0);
+          if (qualityScore < qualityFloor) continue;
+          if (nearAnchor(p.seconds) || nearYtAuto(p.seconds)) continue;
+
+          const distance = Math.abs(p.seconds - target);
+          const distancePenalty = Math.pow(distance / (currentGap * flex), 2);
+
+          // Оцінюємо якість: найтихіші паузи вище, але без сильного відхилення від потрібного інтервалу.
+          const durationBonus = Math.min(Number(p.duration_sec) || 0, minS * 3) / minS;
+          const score = qualityScore * 10 + durationBonus * 0.4 - distancePenalty * 2;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestPause = p;
+          }
+        }
+      }
+
+      // "Тільки ідеальні": якщо найкраща пауза у вікні слабша за межу прийняття YouTube,
+      // шукаємо трохи ширше паузу рівня «добра/люкс» — невелике зміщення ритму
+      // краще за рекламу в сумнівній напівпаузі.
+      // Якщо мітка вже вибрана DP-планом — апгрейд не потрібен, план вже зважив усе відео.
+      const upgradeFloor = Math.max(ytAccept, qualityFloor);
+      if (!fromPlan && bestPause && !bestPause._ytAuto && Number(bestPause.quality_score ?? 0) < upgradeFloor) {
+        const wideStart = Math.max(playhead + currentGap * 0.4, startOffset);
+        const wideEnd = Math.min(target + currentGap * flexWide, duration - endOffset);
+        let upgrade = null;
+        let upgradeScore = -Infinity;
+
+        for (const p of sortedSilences) {
+          if (usedPauses.has(p) || p.seconds < wideStart || p.seconds > wideEnd) continue;
+          const q = Number(p.quality_score ?? 0);
+          if (q < upgradeFloor) continue;
+          if (nearAnchor(p.seconds) || nearYtAuto(p.seconds)) continue;
+
+          const distance = Math.abs(p.seconds - target);
+          const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
+          const score = q * 10 - distancePenalty * 2;
+          if (score > upgradeScore) {
+            upgradeScore = score;
+            upgrade = p;
+          }
+        }
+
+        if (upgrade) {
+          log(`✨ Апгрейд паузи: ${bestPause.timecode} (${Math.round((bestPause.quality_score ?? 0) * 100)}%) → ${upgrade.timecode} (${Math.round((upgrade.quality_score ?? 0) * 100)}%)`, 'info');
+          bestPause = upgrade;
+        }
+      }
+
+      // Fallback: ширше вікно вперед
+      if (!bestPause) {
+        const looseEnd = target + currentGap * flexWide;
+        let fallbackScore = -Infinity;
+
+        for (const p of sortedSilences) {
+          if (usedPauses.has(p) || p.seconds < windowStart || p.seconds > looseEnd) continue;
+          if (Number(p.quality_score ?? 0) < qualityFloor) continue;
+          if (nearAnchor(p.seconds) || nearYtAuto(p.seconds)) continue;
+
+          const distance = Math.abs(p.seconds - target);
+          const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
+          const score = Number(p.quality_score ?? 0) * 10 - distancePenalty;
+
+          if (score > fallbackScore) {
+            fallbackScore = score;
+            bestPause = p;
+          }
+        }
+      }
+
+      // Режим "Без пропусків": пауз у вікні немає → запасна мітка в найтихішому місці вікна.
+      // Ритм реклами (стандарт ~1/2хв) тримається навіть без чистої тиші.
+      if (!bestPause && CONFIG.guaranteeStandard) {
+        if (duration >= 1800 && windowStart >= outroGuardStart) {
+          log(`🛡️ Outro Guard: пропуск запасної мітки у вікні аутро ${toTimecode(windowStart)}–${toTimecode(windowEnd)} (останні 60с)`, 'info');
+        } else {
+          const spot = findQuietestSpot(
+            smoothed, secPerBlock,
+            Math.max(windowStart, startOffset),
+            Math.min(windowEnd, duration - endOffset),
+            Math.max(0.8, Math.min(minS, 2))
+          );
+          if (duration >= 1800 && spot && spot.centerSec >= outroGuardStart) {
+            log(`🛡️ Outro Guard: знайдена позиція запасної ${toTimecode(spot.centerSec)} потрапляє в останні 60с аутро — пропуск`, 'info');
+          } else {
+            const farEnough = spot &&
+              !selectedCands.some(c => Math.abs(c.seconds - spot.centerSec) < 3) &&
+              !nearAnchor(spot.centerSec) &&
+              !nearYtAuto(spot.centerSec);
+            if (farEnough) {
+              // Якість запасної — ТІЄЮ Ж формулою, що й природні паузи (одна лінійка):
+              // ядро тиші, середня (reuse coreQuiet — spot має лише одне avg), піки, контраст
+              // з оточенням, тривалість. Інакше запасні виглядали б кращими за природні через
+              // простішу формулу.
+              const spotLen = Math.max(0.8, Math.min(minS, 2)); // та сама довжина, що передана у findQuietestSpot
+              const qRef = getQualityRefAt(spot.centerSec);
+              const coreQuiet = clamp01((qRef - spot.avgAmp) / qRef);
+              const peakClean = clamp01((qRef - (spot.maxAmp ?? spot.avgAmp)) / qRef);
+              const durationFit = clamp01(spotLen / Math.max((CONFIG.minSilenceSec ?? 1.5) * 2, 0.001));
+              // avgQuiet: spot має лише одне avg, тому reuse coreQuiet для 0.15-терму середньої
+              const contrast = spot.surroundAvg > 0 ? clamp01(1 - spot.avgAmp / spot.surroundAvg) : 0;
+              const relQuiet = clamp01(coreQuiet * 0.45 + coreQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+
+              // «Без пропусків» тепер не означає «за будь-яку ціну»: якщо навіть найтихіше
+              // місце вікна занадто гучне (тихо-в-тихому без реального провалу відносно
+              // оточення), YouTube таку мітку позначає попередженням «реклама навряд чи
+              // показуватиметься». Такий слот краще чесно пропустити (playhead коректно
+              // просунеться далі нижче), ніж заздалегідь ставити «биту» мітку.
+              const fallbackFloor = Math.max(0, Math.min(0.9, (CONFIG.fallbackMinQualityPct ?? 35) / 100));
+              if (relQuiet < fallbackFloor) {
+                log(`🛟 Найтихіше місце вікна ${toTimecode(windowStart)}–${toTimecode(windowEnd)} занадто гучне (${Math.round(relQuiet * 100)}% < поріг ${Math.round(fallbackFloor * 100)}%) — запасну не ставлю, слот пропускаю`, 'warn');
+              } else {
+                bestPause = {
+                  timecode: toTimecode(spot.centerSec),
+                  seconds: +spot.centerSec.toFixed(2),
+                  duration_sec: 0,
+                  ideal_duration_sec: 0,
+                  amplitude: +spot.avgAmp.toFixed(4),
+                  avg_amplitude: +spot.avgAmp.toFixed(4),
+                  best_avg_amplitude: +spot.avgAmp.toFixed(4),
+                  max_amplitude: +(spot.maxAmp ?? spot.avgAmp).toFixed(4),
+                  quality_score: +relQuiet.toFixed(3),
+                  quality_label: 'запасна',
+                  fallbackSpot: true
+                };
+                log(`🛟 Пауз немає у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)} → запасна в найтихішому місці: ${bestPause.timecode} (${Math.round(relQuiet * 100)}%)`, 'warn');
+              }
+            }
+          }
+        }
+      }
+
+      // Якщо НІЧОГО не знайдено — просуваємо playhead рівно на currentGap
+      // ⚠️ КРИТИЧНО: playhead = target (а не target + 0.5*gap!)
+      // Це гарантує що наступне вікно ПОЧИНАЄТЬСЯ там де ЗАКІНЧИЛОСЬ поточне
+      // і між вікнами НЕМАЄ мертвих зон куди можуть падати паузи!
+      if (!bestPause) {
+        playhead = target; // = playhead + currentGap → вікна стикуються ідеально
+        if (playhead > duration - endOffset) break;
+        log(`⚠️ Не знайдено паузи у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)}, слот пропущено`, 'warn');
+        continue;
+      }
+
+      // Додаємо відібрану паузу (тільки реальна тиша)
+      if (bestPause.seconds < duration - endOffset) {
+        selectedCands.push(bestPause);
+        usedPauses.add(bestPause);
+        playhead = bestPause.seconds;
+      } else {
+        break;
+      }
+    }
+
+    return selectedCands;
+  };
+
 
   // ── Авто-ескалація чутливості: якщо природних пауз мало для цілі —
   //    бот сам послаблює критерії (вищий поріг, коротша мін. пауза) ──
@@ -1261,19 +1441,38 @@ async function _doAnalyze() {
   //    Тому обрізаємо лише надлишок ВЛАСНИХ міток понад ідеал; мітки YT та збережені ручні недоторканні.
   const protectedInPlanCount = state.selected.filter(s => s.fromYt || s.fromExisting).length;
   const planCap = idealAds + protectedInPlanCount;
-  if (state.selected.length > planCap) {
-    const excess = state.selected.length - planCap;
-    const sacrificial = state.selected
-      .filter(s => !s.fromYt && !s.fromExisting)
-      .sort((a, b) =>
-        ((a.fallbackSpot ? 0 : 1) - (b.fallbackSpot ? 0 : 1)) ||
-        (Number(a.quality_score ?? 0) - Number(b.quality_score ?? 0))
-      )
-      .slice(0, excess);
-    if (sacrificial.length) {
-      state.selected = state.selected.filter(s => !sacrificial.includes(s));
-      log(`✂️ Знято надлишок власних міток понад ідеал ${idealAds}: ${sacrificial.length} найслабших (мітки YT та збережені ручні недоторканні)`, 'info');
+  let removedCount = 0;
+  while (state.selected.length > planCap) {
+    let bestIdx = -1;
+    let minCost = Infinity;
+
+    for (let i = 0; i < state.selected.length; i++) {
+      const s = state.selected[i];
+      if (s.fromYt || s.fromExisting) continue;
+
+      const prevT = i > 0 ? state.selected[i - 1].seconds : 0;
+      const nextT = i < state.selected.length - 1 ? state.selected[i + 1].seconds : duration;
+      const mergedGap = nextT - prevT;
+
+      // Менший mergedGap кращий для видалення (не утворює дірок у сітці);
+      // fallbackSpot та слабша якість дають пріоритет до видалення при близьких прольотах
+      const quality = Number(s.quality_score ?? 0);
+      const fallbackBonus = s.fallbackSpot ? 20 : 0;
+      const qualityBonus = (1 - quality) * 10;
+      const cost = mergedGap - fallbackBonus - qualityBonus;
+
+      if (cost < minCost) {
+        minCost = cost;
+        bestIdx = i;
+      }
     }
+
+    if (bestIdx === -1) break;
+    state.selected.splice(bestIdx, 1);
+    removedCount++;
+  }
+  if (removedCount > 0) {
+    log(`✂️ Знято надлишок власних міток понад ідеал ${idealAds}: ${removedCount} шт. з найменшими прольотами сітки (мітки YT та ручні недоторканні)`, 'info');
   }
 
   const backupCount = state.selected.filter(s => s.fallbackSpot).length;
@@ -2026,8 +2225,13 @@ async function insertTimecodes() {
           nativeSetter.call(mainInput, s.timecode);
           mainInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
           mainInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, composed: true }));
-          // Studio синхронізує плейхед асинхронно; хибний час нижче все одно виправляється
-          await sleep(document.hidden ? 900 : 400);
+          await waitFor(
+            () => (!videoEl || Math.abs(videoEl.currentTime - s.seconds) < 1.2) &&
+                  (!mainInput || Math.abs((fromTimecode(mainInput.value) ?? -999) - s.seconds) < 1.2),
+            document.hidden ? 1500 : 800,
+            120
+          );
+          await sleep(document.hidden ? 300 : 160);
         } else {
           await sleep(600);
         }

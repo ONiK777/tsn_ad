@@ -75,7 +75,7 @@
             if (match) {
                 const dur = parseFloat(match[1]);
                 if (dur > 0 && isFinite(dur)) {
-                    window.postMessage({ type: 'MRA_VIDEO_DURATION', duration: dur }, '*');
+                    window.postMessage({ type: 'MRA_VIDEO_DURATION', duration: dur, path: window.location.pathname }, '*');
                 }
             }
         } catch (e) { }

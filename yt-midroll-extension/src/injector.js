@@ -7,6 +7,9 @@ function _onInterceptMessage(event) {
 
     // Перехоплення тривалості відео з videoplayback URL
     if (event.data.type === 'MRA_VIDEO_DURATION') {
+      if (event.data.path && event.data.path !== window.location.pathname) {
+        return; // застарілий dur= від попереднього відео при SPA-переході
+      }
       const dur = event.data.duration;
       if (typeof dur === 'number' && isFinite(dur) && dur > 0) {
         state.interceptedDuration = dur;
