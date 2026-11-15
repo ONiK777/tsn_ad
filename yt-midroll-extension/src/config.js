@@ -4,6 +4,7 @@ var CONFIG = {
   guaranteeStandard: true, // Без пропусків: якщо у вікні немає справжньої паузи — ставимо запасну мітку в найтихішому місці
   rhythmFlexPct: 50,   // Гнучкість ритму: ±% від інтервалу при пошуку паузи (ручний режим)
   minQualityPct: 0,    // Мінімальна якість паузи, % (ручний режим; 0 = будь-яка тиша)
+  fallbackMinQualityPct: 35, // Мінімальна якість запасної мітки, %: якщо навіть найтихіше місце вікна слабше — слот пропускається, щоб YT не позначав мітку
   startOffsetSec: 10,  // Не ставити рекламу в перші N секунд
   endOffsetSec: 15,    // Не ставити рекламу в останні N секунд
   minGapSec: 120,
@@ -15,6 +16,7 @@ var CONFIG = {
   focusStart: true,
   autoSaveAfterInsert: true, // Автоматично натискати "Продовжити" та "Зберегти" після вставки міток
   fullAutoInsert: false, // Нуль кліків: відкрив редактор без міток → бот сам аналізує, вставляє і зберігає
+  preserveManualMarks: false,
 };
 
 // ─── СТАН ────────────────────────────────────────────────────────────────────
@@ -37,6 +39,9 @@ var state = {
   ytAdHintsRaw: null, // Перехоплені підказки YouTube про природні паузи: {times: [...], url}
   ytHintsSec: null,   // Ті ж підказки, нормовані в секунди (після аналізу)
   tgEvents: [],       // Буфер подій для Telegram-звіту (заповнюється під час вставки)
+  existingMarks: [], // Мітки, які ВЖЕ стоять на відео (зчитані з редактора перед плануванням)
+  ytAutoMarks: [],   // Таймкоди авто-міток YouTube — 100% якорі плану
+  fullAutoActive: false, // Йде повний цикл авто-вставки: аналіз-звіт не шлемо, його замінить звіт вставки
 };
 
 var isPanelClosedByUser = false;
@@ -48,6 +53,30 @@ var AD_BREAK_TRASH_PATH = 'M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-
 var activeObservers = [];
 var activeEventListeners = [];
 
+var panelObservers = [];
+var panelEventListeners = [];
+
+function addPanelEventListener(element, event, handler, options = false) {
+  if (!element) return;
+  element.addEventListener(event, handler, options);
+  panelEventListeners.push({ element, event, handler, options });
+}
+
+function cleanupPanel() {
+  panelObservers.forEach(obs => {
+    try { obs.disconnect(); } catch (e) { /* ignore */ }
+  });
+  panelObservers = [];
+  panelEventListeners.forEach(({ element, event, handler, options }) => {
+    try {
+      if (element && element.removeEventListener) {
+        element.removeEventListener(event, handler, options);
+      }
+    } catch (e) { /* ignore */ }
+  });
+  panelEventListeners = [];
+}
+
 // Хелпер для додавання event listener з автоматичним трекінгом
 function addTrackedEventListener(element, event, handler, options = false) {
   if (!element) return;
@@ -56,6 +85,8 @@ function addTrackedEventListener(element, event, handler, options = false) {
 }
 
 function cleanup() {
+  cleanupPanel();
+
   // Відключаємо всі observers
   activeObservers.forEach(obs => {
     try { obs.disconnect(); } catch (e) { /* ignore */ }

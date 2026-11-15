@@ -1,5 +1,16 @@
 // ─── АНАЛІЗ АУДІО ────────────────────────────────────────────────────────────
 
+// ── Спрощений режим (за порадою): бот аналізує аудіо й ставить мітки.
+//    Телеграм-звіти ПОВЕРНУТО — тепер ідуть через власний проксі (Apps Script),
+//    токен бота більше не живе в клієнтському коді (див. proxy/README.md).
+//    Пост-вставкове читання вердикту YouTube (пересування/чистка ⚠️) лишається
+//    вимкненим свідомо — трималося на крихкому скрейпінгу чужого інтерфейсу. ──
+var MRA_VERIFY_AFTER_INSERT = false; // читати вердикт YT і чистити/пересувати ⚠️ після вставки
+var MRA_SEND_TG_REPORTS = true;      // слати телеграм-звіти (аналіз «мало пауз» / вставка / no_spots)
+// Стат-пульс (сирий JSON на КОЖНУ вставку в окремий канал) вимкнено окремо:
+// власнику він безкорисний. Решта звітів працює. Постав true — і пульс повернеться.
+var MRA_SEND_STATS_PULSE = false;
+
 // Назва відео: document.title на сторінці редактора міток показує назву РОЗДІЛУ Studio
 // («Способи заробляти»), тому спершу пробуємо елементи з реальною назвою відео.
 function getVideoTitle() {
@@ -209,10 +220,166 @@ function findQuietestSpot(smoothed, secPerBlock, fromSec, toSec, spanSec) {
     }
   }
 
+  // Максимальна згладжена амплітуда у відібраному відрізку (для формули якості пікового шуму)
+  let bestMax = 0;
+  for (let i = bestStart; i < bestStart + spanB && i < smoothed.length; i++) {
+    if (smoothed[i] > bestMax) bestMax = smoothed[i];
+  }
+
+  // Контраст обраного відрізка з оточенням (±4с) — та сама метрика, що й у циклі вище,
+  // але вже для фінально вибраного bestStart (потрібна формулі якості getPauseQuality)
+  const surroundAvg = Math.max(rangeAvg(bestStart - padB, bestStart), rangeAvg(bestStart + spanB, bestStart + spanB + padB));
+
   return {
     centerSec: (bestStart + spanB / 2) * secPerBlock,
-    avgAmp: bestAvg
+    avgAmp: bestAvg,
+    maxAmp: bestMax,
+    surroundAvg
   };
+}
+
+// ─── ГЛОБАЛЬНИЙ ПЛАНУВАЛЬНИК (DP) ────────────────────────────────────────────
+// Жадібний прохід дивиться лише на поточне вікно; DP підбирає НАБІР міток,
+// найкращий по всьому відео одразу. Чиста функція — без стану, легко тестується.
+// cands: [{seconds, quality_score, duration_sec}] (відсортовані за часом, вже відфільтровані за якістю)
+// opts: { duration, gap, idealGapAt(t), flex, flexWide, startOffset, endOffset, minS }
+// Повертає масив індексів вибраних кандидатів (зростаючий) або null, якщо план не знайдено.
+function dpPlanMarks(cands, opts) {
+  let n = cands.length;
+  if (!n) return null;
+
+  // Фільтруємо кандидатів, що виходять за кінцеву захисну зону
+  const filtered = [];
+  const origIdx = [];
+  for (let i = 0; i < n; i++) {
+    if (cands[i].seconds <= opts.duration - opts.endOffset) {
+      filtered.push(cands[i]);
+      origIdx.push(i);
+    }
+  }
+  n = filtered.length;
+  if (!n) return null;
+
+  // Якщо кандидатів забагато — залишаємо 800 найякісніших (зберігаємо маппінг)
+  let workCands = filtered;
+  let workOrigIdx = origIdx;
+  if (n > 800) {
+    // Сортуємо за якістю спадно, беремо 800, потім ресортуємо за часом
+    const ranked = filtered.map((c, i) => ({ c, oi: origIdx[i] }))
+      .sort((a, b) => b.c.quality_score - a.c.quality_score)
+      .slice(0, 800)
+      .sort((a, b) => a.c.seconds - b.c.seconds);
+    workCands = ranked.map(r => r.c);
+    workOrigIdx = ranked.map(r => r.oi);
+    n = 800;
+  }
+
+  const g0 = opts.idealGapAt(0);
+
+  // Максимальна кількість міток (оцінка зверху)
+  const K = Math.max(1, Math.ceil(
+    (opts.duration - opts.startOffset - opts.endOffset) /
+    Math.max(opts.gap * (1 - opts.flex), 1)
+  ) + 1);
+
+  // Захист від вибуху складності
+  if (n * K > 600_000) return null;
+
+  const maxIdealGap = opts.maxIdealGap || opts.gap * 1.4;
+  const maxTransDist = maxIdealGap * (1 + opts.flexWide);
+  const minTransDist = Math.max(3, (opts.minIdealGap || opts.gap * 0.5) * (1 - opts.flex));
+
+  // Функції цінності та штрафу
+  const value = (c) =>
+    c.quality_score * 10 +
+    Math.min(c.duration_sec || 0, opts.minS * 3) / opts.minS * 0.4;
+
+  const pen = (d, g) =>
+    Math.pow((d - g) / (g * opts.flex), 2) * 2;
+
+  // Перевірка дозволеності першої мітки
+  const allowedFirst = (j) => {
+    const t = workCands[j].seconds;
+    if (t < opts.startOffset) return false;
+    if (t > g0 * (1 + opts.flexWide)) return false;
+    return true;
+  };
+
+  // Перевірка дозволеності переходу i → j
+  const allowedTrans = (i, j) => {
+    const ti = workCands[i].seconds;
+    const tj = workCands[j].seconds;
+    const d = tj - ti;
+    const g = opts.idealGapAt(ti);
+    return d >= Math.max(3, g * (1 - opts.flex)) && d <= g * (1 + opts.flexWide);
+  };
+
+  // dp[k][i] = найкраща сума для k міток, що закінчуються на кандидаті i
+  // Використовуємо плоский масив для економії пам'яті
+  const NEG_INF = -1e18;
+  const dp = new Float64Array(K * n).fill(NEG_INF);
+  // parent[k][i] = індекс попередника (або -1 для першої мітки)
+  const parent = new Int32Array(K * n).fill(-1);
+
+  // k=1 (перші мітки, індекс 0-based = k-1 = 0)
+  for (let j = 0; j < n; j++) {
+    if (!allowedFirst(j)) continue;
+    const d = workCands[j].seconds;
+    dp[0 * n + j] = value(workCands[j]) - pen(d, g0);
+  }
+
+  // k >= 2
+  for (let k = 1; k < K; k++) {
+    for (let j = 0; j < n; j++) {
+      for (let i = j - 1; i >= 0; i--) {
+        const dist = workCands[j].seconds - workCands[i].seconds;
+        if (dist > maxTransDist) break;
+        if (dist < minTransDist) continue;
+        if (dp[(k - 1) * n + i] <= NEG_INF / 2) continue;
+        if (!allowedTrans(i, j)) continue;
+        const ti = workCands[i].seconds;
+        const tj = workCands[j].seconds;
+        const g = opts.idealGapAt(ti);
+        const d = tj - ti;
+        const score = dp[(k - 1) * n + i] + value(workCands[j]) - pen(d, g);
+        if (score > dp[k * n + j]) {
+          dp[k * n + j] = score;
+          parent[k * n + j] = i;
+        }
+      }
+    }
+  }
+
+  // Знаходимо глобальний максимум по всіх k, j
+  let bestScore = NEG_INF;
+  let bestK = -1;
+  let bestJ = -1;
+  for (let k = 0; k < K; k++) {
+    for (let j = 0; j < n; j++) {
+      if (dp[k * n + j] > bestScore) {
+        bestScore = dp[k * n + j];
+        bestK = k;
+        bestJ = j;
+      }
+    }
+  }
+
+  if (bestK < 0 || bestScore <= NEG_INF / 2) return null;
+
+  // Відновлення шляху
+  const path = [];
+  let curK = bestK;
+  let curJ = bestJ;
+  while (curK >= 0 && curJ >= 0) {
+    path.push(workOrigIdx[curJ]);
+    const prev = parent[curK * n + curJ];
+    curK--;
+    curJ = prev;
+  }
+  path.reverse();
+
+  if (!path.length) return null;
+  return path;
 }
 
 
@@ -243,6 +410,8 @@ async function _doAnalyze() {
   }
 
   readSettings();
+  // Завантажуємо калібрування якості ДО обчислення qualityFloor (потрібне для getYtAcceptQuality)
+  await loadQualityCalib();
   const video = document.querySelector('video');
 
   // Визначаємо тривалість з кількох джерел (фолбеки)
@@ -412,10 +581,51 @@ async function _doAnalyze() {
   const endOffset = Math.max(0, CONFIG.endOffsetSec ?? 15);
   const flex = Math.min(0.9, Math.max(0.1, (CONFIG.rhythmFlexPct ?? 50) / 100));
   const flexWide = Math.min(0.95, flex * 1.6);
-  // Авто-пілот: емпірична межа YouTube — паузи слабші ~55% він позначає червоним
-  // ("навряд чи показуватиметься"), тому такі навіть не ставимо.
+
+  // Стабільна опора якості: НЕ залежить від рівня ескалації чутливості.
+  // Якість міряємо відносно частки середньої гучності відео, тому 70% означає
+  // те саме на будь-якому рівні драбини — і калібрування за вердиктами YT не пливе.
+  const QUALITY_REF = Math.max(avgAbs * 0.35, 0.000001);
+
+  // Локальна опора якості: враховує локальну гучність активного мовлення у вікні ±45с
+  const BIN_SEC = 5;
+  const numBins = Math.max(1, Math.ceil(duration / BIN_SEC));
+  const activeThreshold = avgAbs * 0.25;
+  const binSum = new Float64Array(numBins);
+  const binCount = new Int32Array(numBins);
+
+  for (let b = 0; b < totalBlocks; b++) {
+    const val = smoothed[b];
+    if (val >= activeThreshold) {
+      const bin = Math.min(numBins - 1, Math.floor((b * secPerBlock) / BIN_SEC));
+      binSum[bin] += val;
+      binCount[bin]++;
+    }
+  }
+
+  const prefSum = new Float64Array(numBins + 1);
+  const prefCount = new Int32Array(numBins + 1);
+  for (let i = 0; i < numBins; i++) {
+    prefSum[i + 1] = prefSum[i] + binSum[i];
+    prefCount[i + 1] = prefCount[i] + binCount[i];
+  }
+
+  const getQualityRefAt = (sec) => {
+    const binIdx = Math.max(0, Math.min(numBins - 1, Math.floor((sec || 0) / BIN_SEC)));
+    const halfWin = 9; // ±45с (9 * 5с)
+    const fromBin = Math.max(0, binIdx - halfWin);
+    const toBin = Math.min(numBins, binIdx + halfWin + 1);
+    const cnt = prefCount[toBin] - prefCount[fromBin];
+    const localAvg = cnt > 0 ? (prefSum[toBin] - prefSum[fromBin]) / cnt : avgAbs;
+    return Math.max(localAvg * 0.35, avgAbs * 0.15, 0.000001);
+  };
+
+  // Поточна межа прийняття YT (може бути самонавчена, або дефолт 0.70)
+  const ytAccept = getYtAcceptQuality();
+
+  // Авто-пілот: паузи слабші за межу прийняття YouTube навіть не ставимо.
   const qualityFloor = CONFIG.autoGap
-    ? 0.55
+    ? ytAccept
     : Math.min(0.9, Math.max(0, (CONFIG.minQualityPct ?? 0) / 100));
 
   // Підказки YouTube (перехоплені сніфером): позиції, які YT сам вважає природними.
@@ -453,142 +663,153 @@ async function _doAnalyze() {
     let currentSilenceStart = null;
     const rawSilences = [];
 
-  for (let b = 0; b < totalBlocks; b++) {
-    const isQuiet = smoothed[b] < GLOBAL_THRESHOLD;
-
-    if (isQuiet && currentSilenceStart === null) {
-      currentSilenceStart = b;
-    } else if (!isQuiet && currentSilenceStart !== null) {
-      const silenceBlocks = b - currentSilenceStart;
+    const pushSilenceSegment = (startBlock, endBlock, minSilenceSec, silencesList) => {
+      const silenceBlocks = endBlock - startBlock;
       const silenceSecs = silenceBlocks * secPerBlock;
+      if (silenceSecs < minSilenceSec) return;
 
-      if (silenceSecs >= minS) {
-        let minAmpVal = Infinity;
-        let maxAmpVal = 0;
-        let sumAmpVal = 0;
-        for (let j = currentSilenceStart; j < b; j++) {
-          if (smoothed[j] < minAmpVal) { minAmpVal = smoothed[j]; }
-          if (smoothed[j] > maxAmpVal) { maxAmpVal = smoothed[j]; }
-          sumAmpVal += smoothed[j];
+      let minAmpVal = Infinity;
+      let maxAmpVal = 0;
+      let sumAmpVal = 0;
+      for (let j = startBlock; j < endBlock; j++) {
+        const v = smoothed[j];
+        if (v < minAmpVal) minAmpVal = v;
+        if (v > maxAmpVal) maxAmpVal = v;
+        sumAmpVal += v;
+      }
+      const avgAmpVal = sumAmpVal / silenceBlocks;
+
+      const idealBlocks = Math.max(1, Math.round(minSilenceSec / secPerBlock));
+      let bestStart = startBlock;
+      let bestAvg = avgAmpVal;
+
+      if (silenceBlocks > idealBlocks) {
+        let rollingSum = 0;
+        for (let j = startBlock; j < startBlock + idealBlocks; j++) rollingSum += smoothed[j];
+        let unpaddedAvg = rollingSum / idealBlocks;
+        let unpaddedStart = startBlock;
+
+        for (let start = startBlock + 1; start <= endBlock - idealBlocks; start++) {
+          rollingSum += smoothed[start + idealBlocks - 1] - smoothed[start - 1];
+          const avg = rollingSum / idealBlocks;
+          if (avg < unpaddedAvg) {
+            unpaddedAvg = avg;
+            unpaddedStart = start;
+          }
         }
-        const avgAmpVal = sumAmpVal / silenceBlocks;
 
-        const idealBlocks = Math.max(1, Math.round(minS / secPerBlock));
-        let bestStart = currentSilenceStart;
-        let bestAvg = Infinity;
+        bestStart = unpaddedStart;
+        bestAvg = unpaddedAvg;
 
-        if (silenceBlocks > idealBlocks) {
-          let rollingSum = 0;
-          for (let j = currentSilenceStart; j < currentSilenceStart + idealBlocks; j++) rollingSum += smoothed[j];
-          bestAvg = rollingSum / idealBlocks;
+        // Захисний буфер (атака/затухання): до 0.4с праворуч перед атакою слова і до 0.25с ліворуч після затухання
+        const rightPadBlocks = Math.min(Math.floor(silenceBlocks * 0.3), Math.round(0.4 / secPerBlock));
+        const leftPadBlocks = Math.min(Math.floor(silenceBlocks * 0.2), Math.round(0.25 / secPerBlock));
+        const paddedMinStart = startBlock + leftPadBlocks;
+        const paddedMaxStart = endBlock - idealBlocks - rightPadBlocks;
 
-          for (let start = currentSilenceStart + 1; start <= b - idealBlocks; start++) {
-            rollingSum += smoothed[start + idealBlocks - 1] - smoothed[start - 1];
-            const avg = rollingSum / idealBlocks;
-            if (avg < bestAvg) {
-              bestAvg = avg;
-              bestStart = start;
+        if (paddedMaxStart >= paddedMinStart) {
+          let pRollingSum = 0;
+          for (let j = paddedMinStart; j < paddedMinStart + idealBlocks; j++) pRollingSum += smoothed[j];
+          let paddedAvg = pRollingSum / idealBlocks;
+          let paddedStart = paddedMinStart;
+
+          for (let start = paddedMinStart + 1; start <= paddedMaxStart; start++) {
+            pRollingSum += smoothed[start + idealBlocks - 1] - smoothed[start - 1];
+            const avg = pRollingSum / idealBlocks;
+            if (avg < paddedAvg) {
+              paddedAvg = avg;
+              paddedStart = start;
             }
           }
-        } else {
-          bestAvg = avgAmpVal;
-        }
 
-        const bestCenterBlock = bestStart + Math.min(silenceBlocks, idealBlocks) / 2;
-        const pauseCenter = bestCenterBlock * secPerBlock;
-
-        // Ігноруємо захисну зону на початку
-        if (pauseCenter >= startOffset) {
-          rawSilences.push({
-            timecode: toTimecode(pauseCenter),
-            seconds: +pauseCenter.toFixed(2),
-            duration_sec: +silenceSecs.toFixed(1),
-            ideal_duration_sec: +Math.min(silenceSecs, minS).toFixed(1),
-            amplitude: +minAmpVal.toFixed(4),
-            avg_amplitude: +avgAmpVal.toFixed(4),
-            best_avg_amplitude: +bestAvg.toFixed(4),
-            max_amplitude: +maxAmpVal.toFixed(4)
-          });
+          // Віддаємо перевагу захищеному підвікну, якщо воно не більше ніж в 1.5 рази гірше за небуферизований мінімум
+          if (paddedAvg <= unpaddedAvg * 1.5) {
+            bestStart = paddedStart;
+            bestAvg = paddedAvg;
+          }
         }
       }
-      currentSilenceStart = null;
-    }
-  }
 
-  // Якщо відео закінчилось паузою
-  if (currentSilenceStart !== null) {
-    const silenceBlocks = totalBlocks - currentSilenceStart;
-    const silenceSecs = silenceBlocks * secPerBlock;
-    if (silenceSecs >= minS) {
-      const pauseCenter = (currentSilenceStart + (totalBlocks - currentSilenceStart) / 2) * secPerBlock;
+      const bestCenterBlock = bestStart + Math.min(silenceBlocks, idealBlocks) / 2;
+      const pauseCenter = bestCenterBlock * secPerBlock;
+
+      // Ігноруємо захисну зону на початку
       if (pauseCenter >= startOffset) {
-        let minAmpVal = Infinity;
-        let maxAmpVal = 0;
-        let sumAmpVal = 0;
-        for (let j = currentSilenceStart; j < totalBlocks; j++) {
-          if (smoothed[j] < minAmpVal) { minAmpVal = smoothed[j]; }
-          if (smoothed[j] > maxAmpVal) { maxAmpVal = smoothed[j]; }
-          sumAmpVal += smoothed[j];
-        }
-        const avgAmpVal = sumAmpVal / silenceBlocks;
-
-        const idealBlocks = Math.max(1, Math.round(minS / secPerBlock));
-        let bestStart = currentSilenceStart;
-        let bestAvg = Infinity;
-
-        if (silenceBlocks > idealBlocks) {
-          let rollingSum = 0;
-          for (let j = currentSilenceStart; j < currentSilenceStart + idealBlocks; j++) rollingSum += smoothed[j];
-          bestAvg = rollingSum / idealBlocks;
-
-          for (let start = currentSilenceStart + 1; start <= totalBlocks - idealBlocks; start++) {
-            rollingSum += smoothed[start + idealBlocks - 1] - smoothed[start - 1];
-            const avg = rollingSum / idealBlocks;
-            if (avg < bestAvg) {
-              bestAvg = avg;
-              bestStart = start;
-            }
-          }
-        } else {
-          bestAvg = avgAmpVal;
-        }
-
-        const bestCenterBlock = bestStart + Math.min(silenceBlocks, idealBlocks) / 2;
-        const bestCenter = bestCenterBlock * secPerBlock;
-
-        rawSilences.push({
-          timecode: toTimecode(bestCenter),
-          seconds: +bestCenter.toFixed(2),
+        silencesList.push({
+          timecode: toTimecode(pauseCenter),
+          seconds: +pauseCenter.toFixed(2),
+          start_sec: +(startBlock * secPerBlock).toFixed(2),
+          end_sec: +(endBlock * secPerBlock).toFixed(2),
           duration_sec: +silenceSecs.toFixed(1),
-          ideal_duration_sec: +Math.min(silenceSecs, minS).toFixed(1),
+          ideal_duration_sec: +Math.min(silenceSecs, minSilenceSec).toFixed(1),
           amplitude: +minAmpVal.toFixed(4),
           avg_amplitude: +avgAmpVal.toFixed(4),
           best_avg_amplitude: +bestAvg.toFixed(4),
           max_amplitude: +maxAmpVal.toFixed(4)
         });
       }
+    };
+
+    for (let b = 0; b < totalBlocks; b++) {
+      const isQuiet = smoothed[b] < GLOBAL_THRESHOLD;
+
+      if (isQuiet && currentSilenceStart === null) {
+        currentSilenceStart = b;
+      } else if (!isQuiet && currentSilenceStart !== null) {
+        pushSilenceSegment(currentSilenceStart, b, minS, rawSilences);
+        currentSilenceStart = null;
+      }
     }
-  }
+
+    // Якщо відео закінчилось паузою
+    if (currentSilenceStart !== null) {
+      pushSilenceSegment(currentSilenceStart, totalBlocks, minS, rawSilences);
+      currentSilenceStart = null;
+    }
+
+    // Стабільна базова мінімальна пауза для durationFit (не залежить від рівня ескалації)
+    const baseMinSStable = CONFIG.minSilenceSec ?? 1.5;
 
     const getPauseQuality = (p) => {
-      const thresholdSafe = Math.max(GLOBAL_THRESHOLD, 0.000001);
-      const bestAvg = Number(p.best_avg_amplitude ?? p.avg_amplitude ?? p.amplitude ?? GLOBAL_THRESHOLD);
+      // Використовуємо локальну опору якості на позиції паузи (±45с активного мовлення)
+      const qRef = getQualityRefAt(p.seconds);
+      const bestAvg = Number(p.best_avg_amplitude ?? p.avg_amplitude ?? p.amplitude ?? qRef);
       const avgAmpVal = Number(p.avg_amplitude ?? bestAvg);
       const peakAmp = Number(p.max_amplitude ?? bestAvg);
       const durationSec = Number(p.duration_sec) || 0;
 
-      const coreQuiet = clamp01((GLOBAL_THRESHOLD - bestAvg) / thresholdSafe);
-      const avgQuiet = clamp01((GLOBAL_THRESHOLD - avgAmpVal) / thresholdSafe);
-      const peakClean = clamp01((GLOBAL_THRESHOLD - peakAmp) / thresholdSafe);
-      const durationFit = clamp01(durationSec / Math.max(minS * 2, minS + 0.001));
+      const coreQuiet = clamp01((qRef - bestAvg) / qRef);
+      const avgQuiet = clamp01((qRef - avgAmpVal) / qRef);
+      const peakClean = clamp01((qRef - peakAmp) / qRef);
+      // durationFit прив'язаний до стабільного baseMinSStable, а не до поточного minS ескалації
+      const durationFit = clamp01(durationSec / Math.max(baseMinSStable * 2, baseMinSStable + 0.001));
 
-      return clamp01(coreQuiet * 0.55 + avgQuiet * 0.2 + peakClean * 0.2 + durationFit * 0.05);
+      // contrast: наскільки пауза є ПРОВАЛОМ гучності відносно оточення (±4с), а не просто
+      // тихим місцем усередині загалом тихого фрагмента (фонова музика/амбіент). Чисто
+      // амплітудні терми вище цього не бачать — тихо-в-тихому і справжня пауза між реченнями
+      // виглядають однаково тихими. YouTube вважає природною паузою саме провал між
+      // гучнішими фрагментами, тому «тихо в тихому» тут карається (contrast → 0).
+      const padB = Math.max(1, Math.round(4 / secPerBlock));
+      const sB = Math.max(0, Math.floor((p.start_sec ?? (p.seconds - durationSec / 2)) / secPerBlock));
+      const eB = Math.min(totalBlocks, Math.ceil((p.end_sec ?? (p.seconds + durationSec / 2)) / secPerBlock));
+      const avgOf = (from, to) => {
+        if (to <= from) return -1;
+        let sum = 0;
+        for (let i = from; i < to; i++) sum += smoothed[i];
+        return sum / (to - from);
+      };
+      const beforeAvg = avgOf(Math.max(0, sB - padB), sB);
+      const afterAvg = avgOf(eB, Math.min(totalBlocks, eB + padB));
+      const surroundAvg = Math.max(beforeAvg, afterAvg);
+      const contrast = surroundAvg > 0 ? clamp01(1 - bestAvg / surroundAvg) : 0;
+
+      return clamp01(coreQuiet * 0.45 + avgQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
     };
 
     rawSilences.forEach(p => {
       const quality = getPauseQuality(p);
       p.quality_score = +quality.toFixed(3);
-      p.quality_label = quality >= 0.78 ? 'люкс' : (quality >= 0.55 ? 'добра' : 'ок');
+      p.quality_label = quality >= 0.78 ? 'люкс' : (quality >= ytAccept ? 'добра' : 'ок');
     });
 
     return { rawSilences, threshold: GLOBAL_THRESHOLD };
@@ -596,10 +817,66 @@ async function _doAnalyze() {
 
   // Розстановка міток за ритмом gap по знайдених паузах
   const runSelection = (rawSilences, minS) => {
+    // ── Якорі: якщо увімкнено збереження ручних міток (Smart Top-Up),
+    //    беремо їх як якорі й не ставимо рекламу впритул до них ──
+    const anchors = (CONFIG.preserveManualMarks && Array.isArray(state.existingMarks) && state.existingMarks.length > 0)
+      ? state.existingMarks
+      : [];
+    const nearAnchor = (sec) => anchors.some(m => Math.abs(m.seconds - sec) < (anchors.length ? Math.max(15, gap * 0.35) : 3));
+
     const selectedCands = [];
     const usedPauses = new Set();
     const usedHints = new Set();
     const sortedSilences = [...rawSilences].sort((a, b) => a.seconds - b.seconds);
+
+    // ── Глобальний план (DP): найкращий набір міток по всьому відео ──
+    // У режимі дозаповнення ручних міток DP вимикаємо — працює жадібне заповнення прогалин
+    let preferred = [];
+    if (!anchors.length) {
+      try {
+        const dpCands = [];
+        // Підказки YT — найсильніші кандидати (0.95), далі природні паузи що проходять межу
+        for (const hs of ytHints) {
+          if (hs >= startOffset && hs <= duration - endOffset) {
+            dpCands.push({ seconds: hs, quality_score: 0.95, duration_sec: 0, _hint: true });
+          }
+        }
+        for (const p of sortedSilences) {
+          if (Number(p.quality_score ?? 0) < qualityFloor) continue;
+          // Природну паузу впритул до підказки YT не дублюємо — підказка головніша
+          if (dpCands.some(c => c._hint && Math.abs(c.seconds - p.seconds) < 1.5)) continue;
+          dpCands.push({ seconds: p.seconds, quality_score: Number(p.quality_score ?? 0), duration_sec: Number(p.duration_sec) || 0, _src: p });
+        }
+        dpCands.sort((a, b) => a.seconds - b.seconds);
+        const idealGapAt = (t) => {
+          if (!CONFIG.focusStart) return gap;
+          const g = gap * (0.5 + (t / duration) * 0.5);
+          return CONFIG.autoGap ? g * 1.386 : g;
+        };
+        const maxIdealGap = CONFIG.focusStart && CONFIG.autoGap ? gap * 1.386 : gap;
+        const minIdealGap = CONFIG.focusStart ? gap * 0.5 * (CONFIG.autoGap ? 1.386 : 1) : gap;
+        const planIdx = dpPlanMarks(dpCands, {
+          duration,
+          gap,
+          idealGapAt,
+          maxIdealGap,
+          minIdealGap,
+          flex,
+          flexWide,
+          startOffset,
+          endOffset,
+          minS
+        });
+        if (planIdx && planIdx.length) {
+          preferred = planIdx.map(i => dpCands[i]);
+          log(`🧠 Глобальний план (DP): ${preferred.length} позицій (підказок YT: ${preferred.filter(c => c._hint).length})`, 'info');
+        }
+      } catch (e) {
+        console.warn('[TSN ANALYZER] DP-планувальник впав, працює жадібний прохід:', e);
+        preferred = [];
+      }
+    }
+
     let playhead = 0;
 
   while (true) {
@@ -621,6 +898,17 @@ async function _doAnalyze() {
     // Не ставимо рекламу в захисну зону наприкінці відео
     if (target > duration - endOffset) break;
 
+    // Smart Top-Up: якщо в поточному слоті є збережена ручна мітка — стрибаємо на неї
+    if (anchors.length > 0) {
+      const matchingAnchors = anchors
+        .filter(m => m.seconds > playhead + 3 && m.seconds <= target + currentGap * 0.25)
+        .sort((a, b) => a.seconds - b.seconds);
+      if (matchingAnchors.length > 0) {
+        playhead = matchingAnchors[0].seconds;
+        continue;
+      }
+    }
+
     // Вікно пошуку ±flex від gap — при 50% вікна стикуються без мертвих зон
     const windowStart = target - (currentGap * flex);
     const windowEnd = target + (currentGap * flex);
@@ -628,12 +916,48 @@ async function _doAnalyze() {
     let bestPause = null;
     let bestScore = -Infinity;
 
+    // Пріоритет №0: позиція з глобального плану (DP) у поточному вікні —
+    // план уже зважив усе відео цілком, локальний вибір його не переб'є
+    if (preferred.length) {
+      let bestPref = null, bestPrefDist = Infinity;
+      for (const c of preferred) {
+        if (c._used || c.seconds < windowStart || c.seconds > windowEnd) continue;
+        if (nearAnchor(c.seconds)) continue;
+        const d = Math.abs(c.seconds - target);
+        if (d < bestPrefDist) { bestPrefDist = d; bestPref = c; }
+      }
+      // Якщо в [windowStart, windowEnd] немає — шукаємо в повному переході DP [playhead + minTrans, playhead + maxTrans]
+      if (!bestPref) {
+        const dpRangeStart = playhead + Math.max(3, currentGap * (1 - flex));
+        const dpRangeEnd = playhead + currentGap * (1 + flexWide);
+        for (const c of preferred) {
+          if (c._used || c.seconds < dpRangeStart || c.seconds > dpRangeEnd) continue;
+          if (nearAnchor(c.seconds)) continue;
+          bestPref = c;
+          break; // беремо першу найближчу в дозволеному DP інтервалі
+        }
+      }
+      if (bestPref) {
+        bestPref._used = true;
+        if (bestPref._hint) {
+          usedHints.add(bestPref.seconds);
+          bestPause = { timecode: toTimecode(bestPref.seconds), seconds: +bestPref.seconds.toFixed(2), duration_sec: 0, ideal_duration_sec: 0, amplitude: 0, avg_amplitude: 0, best_avg_amplitude: 0, max_amplitude: 0, quality_score: 0.95, quality_label: 'підказка YT', ytHint: true };
+        } else if (bestPref._src && !usedPauses.has(bestPref._src)) {
+          usedPauses.add(bestPref._src);
+          bestPause = bestPref._src;
+        }
+      }
+    }
+    // Запам'ятовуємо, чи мітка прийшла з DP-плану (тоді апгрейд не потрібен)
+    const fromPlan = !!bestPause;
+
     // Пріоритет №1: підказка YouTube у вікні — це місце YT гарантовано вважає
     // природним і не позначить червоним
-    if (ytHints.length) {
+    if (!bestPause && ytHints.length) {
       let bestHint = null, bestHintDist = Infinity;
       for (const hs of ytHints) {
         if (hs < windowStart || hs > windowEnd || usedHints.has(hs)) continue;
+        if (nearAnchor(hs)) continue;
         const d = Math.abs(hs - target);
         if (d < bestHintDist) { bestHintDist = d; bestHint = hs; }
       }
@@ -661,6 +985,7 @@ async function _doAnalyze() {
         // Фільтр мінімальної якості (експертний режим)
         const qualityScore = Number(p.quality_score ?? 0);
         if (qualityScore < qualityFloor) continue;
+        if (nearAnchor(p.seconds)) continue;
 
         const distance = Math.abs(p.seconds - target);
         const distancePenalty = Math.pow(distance / (currentGap * flex), 2);
@@ -676,13 +1001,14 @@ async function _doAnalyze() {
       }
     }
 
-    // "Тільки ідеальні": якщо найкраща пауза у вікні слабка («ок» < 55%),
+    // "Тільки ідеальні": якщо найкраща пауза у вікні слабша за межу прийняття YouTube,
     // шукаємо трохи ширше паузу рівня «добра/люкс» — невелике зміщення ритму
     // краще за рекламу в сумнівній напівпаузі.
-    if (bestPause && Number(bestPause.quality_score ?? 0) < 0.55) {
+    // Якщо мітка вже вибрана DP-планом — апгрейд не потрібен, план вже зважив усе відео.
+    const upgradeFloor = Math.max(ytAccept, qualityFloor);
+    if (!fromPlan && bestPause && Number(bestPause.quality_score ?? 0) < upgradeFloor) {
       const wideStart = Math.max(playhead + currentGap * 0.4, startOffset);
       const wideEnd = Math.min(target + currentGap * flexWide, duration - endOffset);
-      const upgradeFloor = Math.max(0.55, qualityFloor);
       let upgrade = null;
       let upgradeScore = -Infinity;
 
@@ -690,6 +1016,7 @@ async function _doAnalyze() {
         if (usedPauses.has(p) || p.seconds < wideStart || p.seconds > wideEnd) continue;
         const q = Number(p.quality_score ?? 0);
         if (q < upgradeFloor) continue;
+        if (nearAnchor(p.seconds)) continue;
 
         const distance = Math.abs(p.seconds - target);
         const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
@@ -714,6 +1041,7 @@ async function _doAnalyze() {
       for (const p of sortedSilences) {
         if (usedPauses.has(p) || p.seconds < windowStart || p.seconds > looseEnd) continue;
         if (Number(p.quality_score ?? 0) < qualityFloor) continue;
+        if (nearAnchor(p.seconds)) continue;
 
         const distance = Math.abs(p.seconds - target);
         const distancePenalty = Math.pow(distance / Math.max(currentGap * flexWide, 1), 2);
@@ -735,23 +1063,45 @@ async function _doAnalyze() {
         Math.min(windowEnd, duration - endOffset),
         Math.max(0.8, Math.min(minS, 2))
       );
-      const farEnough = spot && !selectedCands.some(c => Math.abs(c.seconds - spot.centerSec) < 3);
+      const farEnough = spot && !selectedCands.some(c => Math.abs(c.seconds - spot.centerSec) < 3) && !nearAnchor(spot.centerSec);
       if (farEnough) {
-        const relQuiet = clamp01(1 - spot.avgAmp / Math.max(avgAbs, 0.000001));
-        bestPause = {
-          timecode: toTimecode(spot.centerSec),
-          seconds: +spot.centerSec.toFixed(2),
-          duration_sec: 0,
-          ideal_duration_sec: 0,
-          amplitude: +spot.avgAmp.toFixed(4),
-          avg_amplitude: +spot.avgAmp.toFixed(4),
-          best_avg_amplitude: +spot.avgAmp.toFixed(4),
-          max_amplitude: +spot.avgAmp.toFixed(4),
-          quality_score: +relQuiet.toFixed(3),
-          quality_label: 'запасна',
-          fallbackSpot: true
-        };
-        log(`🛟 Пауз немає у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)} → запасна мітка в найтихішому місці: ${bestPause.timecode}`, 'warn');
+        // Якість запасної — ТІЄЮ Ж формулою, що й природні паузи (одна лінійка):
+        // ядро тиші, середня (reuse coreQuiet — spot має лише одне avg), піки, контраст
+        // з оточенням, тривалість. Інакше запасні виглядали б кращими за природні через
+        // простішу формулу.
+        const spotLen = Math.max(0.8, Math.min(minS, 2)); // та сама довжина, що передана у findQuietestSpot
+        const qRef = getQualityRefAt(spot.centerSec);
+        const coreQuiet = clamp01((qRef - spot.avgAmp) / qRef);
+        const peakClean = clamp01((qRef - (spot.maxAmp ?? spot.avgAmp)) / qRef);
+        const durationFit = clamp01(spotLen / Math.max((CONFIG.minSilenceSec ?? 1.5) * 2, 0.001));
+        // avgQuiet: spot має лише одне avg, тому reuse coreQuiet для 0.15-терму середньої
+        const contrast = spot.surroundAvg > 0 ? clamp01(1 - spot.avgAmp / spot.surroundAvg) : 0;
+        const relQuiet = clamp01(coreQuiet * 0.45 + coreQuiet * 0.15 + peakClean * 0.15 + contrast * 0.20 + durationFit * 0.05);
+
+        // «Без пропусків» тепер не означає «за будь-яку ціну»: якщо навіть найтихіше
+        // місце вікна занадто гучне (тихо-в-тихому без реального провалу відносно
+        // оточення), YouTube таку мітку позначає попередженням «реклама навряд чи
+        // показуватиметься». Такий слот краще чесно пропустити (playhead коректно
+        // просунеться далі нижче), ніж заздалегідь ставити «биту» мітку.
+        const fallbackFloor = Math.max(0, Math.min(0.9, (CONFIG.fallbackMinQualityPct ?? 35) / 100));
+        if (relQuiet < fallbackFloor) {
+          log(`🛟 Найтихіше місце вікна ${toTimecode(windowStart)}–${toTimecode(windowEnd)} занадто гучне (${Math.round(relQuiet * 100)}% < поріг ${Math.round(fallbackFloor * 100)}%) — запасну не ставлю, слот пропускаю`, 'warn');
+        } else {
+          bestPause = {
+            timecode: toTimecode(spot.centerSec),
+            seconds: +spot.centerSec.toFixed(2),
+            duration_sec: 0,
+            ideal_duration_sec: 0,
+            amplitude: +spot.avgAmp.toFixed(4),
+            avg_amplitude: +spot.avgAmp.toFixed(4),
+            best_avg_amplitude: +spot.avgAmp.toFixed(4),
+            max_amplitude: +(spot.maxAmp ?? spot.avgAmp).toFixed(4),
+            quality_score: +relQuiet.toFixed(3),
+            quality_label: 'запасна',
+            fallbackSpot: true
+          };
+          log(`🛟 Пауз немає у вікні ${toTimecode(windowStart)}–${toTimecode(windowEnd)} → запасна в найтихішому місці: ${bestPause.timecode} (${Math.round(relQuiet * 100)}%)`, 'warn');
+        }
       }
     }
 
@@ -778,6 +1128,24 @@ async function _doAnalyze() {
 
     return selectedCands;
   };
+
+  // ── Зчитуємо мітки, що вже стоять на відео (до запуску планувальника).
+  //    Аналіз НІЧОГО не змінює на відео.
+  //    Ручні мітки — лише інформаційно (вони будуть знесені при вставці).
+  //    Авто-мітки YT запам'ятовуємо як 100%-якорі: при вставці чекбокс знімається
+  //    і вони зникають, тому включаємо їх у план заздалегідь. ──
+  state.existingMarks = readExistingAdBreaks();
+  state.ytAutoMarks = readYtAutoMarks();
+  if (state.ytAutoMarks.length > 0) {
+    log(`📌 YouTube вже має ${state.ytAutoMarks.length} авто-міток — беремо їх у план як 100% якорі`, 'info');
+  }
+  if (state.existingMarks.length > 0) {
+    if (CONFIG.preserveManualMarks) {
+      log(`📌 На відео вже стоїть ${state.existingMarks.length} ручних міток (режим дозаповнення — зберігаємо)`, 'info');
+    } else {
+      log(`📌 На відео вже стоїть ${state.existingMarks.length} ручних міток (інформаційно — при вставці будуть знесені)`, 'info');
+    }
+  }
 
   // ── Авто-ескалація чутливості: якщо природних пауз мало для цілі —
   //    бот сам послаблює критерії (вищий поріг, коротша мін. пауза) ──
@@ -826,15 +1194,98 @@ async function _doAnalyze() {
   }
 
   state.selected = best.cands;
+
+  // ── Вливаємо авто-мітки YouTube як якорі (fromYt: true, quality: 1.0) ──
+  // Вони знімаються при вставці разом з чекбоксом, тому включаємо їх у план заздалегідь.
+  const ytAnchors = state.ytAutoMarks || [];
+  for (const anchor of ytAnchors) {
+    // Не дублюємо, якщо планувальник вже поставив щось поруч (<3с)
+    if (!state.selected.some(s => Math.abs(s.seconds - anchor.seconds) < 3)) {
+      state.selected.push({
+        timecode: anchor.timecode,
+        seconds: anchor.seconds,
+        duration_sec: null,
+        ideal_duration_sec: null,
+        amplitude: null,
+        avg_amplitude: null,
+        best_avg_amplitude: null,
+        max_amplitude: null,
+        quality_score: 1.0,
+        quality_label: 'YT авто',
+        fromYt: true
+      });
+    }
+  }
+
+  // ── Smart Top-Up: збережені ручні мітки вливаємо у план (fromExisting: true, inserted: true) ──
+  if (CONFIG.preserveManualMarks && state.existingMarks && state.existingMarks.length > 0) {
+    for (const m of state.existingMarks) {
+      if (!state.selected.some(s => Math.abs(s.seconds - m.seconds) < 3)) {
+        state.selected.push({
+          timecode: m.timecode,
+          seconds: m.seconds,
+          duration_sec: null,
+          ideal_duration_sec: null,
+          amplitude: null,
+          avg_amplitude: null,
+          best_avg_amplitude: null,
+          max_amplitude: null,
+          quality_score: 1.0,
+          quality_label: 'ручна (збережена)',
+          fromExisting: true,
+          inserted: true
+        });
+      }
+    }
+  }
+
   state.selected.sort((a, b) => a.seconds - b.seconds);
 
-  // Дедуплікація: видаляємо мітки ближче ніж 3 секунди одна від одної
-  state.selected = state.selected.filter((s, i, arr) =>
-    i === 0 || s.seconds - arr[i - 1].seconds >= 3
-  );
+  // Дедуплікація: видаляємо мітки ближче ніж 3 секунди одна від одної;
+  // fromYt та fromExisting мають пріоритет — при конфлікті залишаємо якір
+  state.selected = state.selected.filter((s, i, arr) => {
+    if (i === 0) return true;
+    if (s.seconds - arr[i - 1].seconds < 3) {
+      // якщо поточна — якір (YT чи ручна), а попередня ні: якір лишається, власну мітку знімаємо
+      if ((s.fromYt || s.fromExisting) && !(arr[i - 1].fromYt || arr[i - 1].fromExisting)) {
+        arr[i - 1]._dedupRemove = true;
+        return true;
+      }
+      return false;
+    }
+    return true;
+  }).filter(s => !s._dedupRemove);
+
+  // ── Стеля плану: бот тримає СВІЙ повний ритм (до idealAds власних міток),
+  //    а мітки YouTube та збережені ручні ДОДАЮТЬСЯ зверху — повна картина, нічого не губиться.
+  //    Тому обрізаємо лише надлишок ВЛАСНИХ міток понад ідеал; мітки YT та збережені ручні недоторканні.
+  const protectedInPlanCount = state.selected.filter(s => s.fromYt || s.fromExisting).length;
+  const planCap = idealAds + protectedInPlanCount;
+  if (state.selected.length > planCap) {
+    const excess = state.selected.length - planCap;
+    const sacrificial = state.selected
+      .filter(s => !s.fromYt && !s.fromExisting)
+      .sort((a, b) =>
+        ((a.fallbackSpot ? 0 : 1) - (b.fallbackSpot ? 0 : 1)) ||
+        (Number(a.quality_score ?? 0) - Number(b.quality_score ?? 0))
+      )
+      .slice(0, excess);
+    if (sacrificial.length) {
+      state.selected = state.selected.filter(s => !sacrificial.includes(s));
+      log(`✂️ Знято надлишок власних міток понад ідеал ${idealAds}: ${sacrificial.length} найслабших (мітки YT та збережені ручні недоторканні)`, 'info');
+    }
+  }
 
   const backupCount = state.selected.filter(s => s.fallbackSpot).length;
-  const realCnt = state.selected.length - backupCount;
+  const ytFromCount = state.selected.filter(s => s.fromYt).length;
+  const existingCount = state.selected.filter(s => s.fromExisting).length;
+  const realCnt = state.selected.length - backupCount - ytFromCount - existingCount;
+
+  // Підрахунок «добрих» (пройшли межу прийняття YT, підказка YT, збережена ручна або якір YT) та «ризикованих» міток
+  const goodCount = state.selected.filter(s =>
+    s.fromYt === true || s.fromExisting === true || s.ytHint === true || Number(s.quality_score ?? 0) >= ytAccept
+  ).length;
+  const riskyCount = state.selected.length - goodCount;
 
   // Підсумок авто-пілота для діагнозу відео (рендериться під статистикою)
   state.analysisMeta = {
@@ -845,21 +1296,30 @@ async function _doAnalyze() {
     finalMinS: best.minS,
     pausesFound: rawSilences.length,
     realPauses: realCnt,
-    backupCount
+    backupCount,
+    riskyCount,   // міток нижче межі прийняття YT (саме вони можуть не показатись)
+    goodCount,    // міток на/вище межі, підказок YT або якорів YT
+    existingCount: (state.existingMarks || []).length,
+    ytAutoCount: ytAnchors.length
   };
 
   console.group('%c🎬 [MRA] Відібрані позиції', 'color:#06d6a0;font-weight:bold');
   state.selected.forEach((s, i) =>
-    console.log(s.fallbackSpot
-      ? `  ${i + 1}. ${s.timecode}  (запасна — найтихіше місце, чистої паузи немає)`
-      : `  ${i + 1}. ${s.timecode}  (пауза: ${s.duration_sec}с, якість: ${Math.round((s.quality_score ?? 0) * 100)}%, амп: ${s.amplitude})`)
+    console.log(s.fromExisting
+      ? `  ${i + 1}. ${s.timecode}  (ручна збережена — 100%)`
+      : s.fromYt
+        ? `  ${i + 1}. ${s.timecode}  (якір YT авто — 100%)`
+        : s.fallbackSpot
+          ? `  ${i + 1}. ${s.timecode}  (запасна — найтихіше місце, чистої паузи немає)`
+          : `  ${i + 1}. ${s.timecode}  (пауза: ${s.duration_sec}с, якість: ${Math.round((s.quality_score ?? 0) * 100)}%, амп: ${s.amplitude})`)
   );
   if (state.selected.length === 0)
     console.log('  ⚠️ Не вдалось знайти підходящих пауз з таким інтервалом та параметрами!');
   console.groupEnd();
 
   const gapR = Math.round(gap);
-  log(`Відібрано ${state.selected.length}/${idealAds} місць (природних: ${realCnt}, запасних: ${backupCount}, ритм ~${gapR}с${best.level > 0 ? `, бот підняв чутливість до ${best.thr}%` : ''})`, state.selected.length > 0 ? 'success' : 'warn');
+  const ytAutoCountLog = ytAnchors.length > 0 ? `, якорів YT: ${ytAnchors.length}` : '';
+  log(`Відібрано ${state.selected.length}/${idealAds} місць (природних: ${realCnt}, запасних: ${backupCount}${ytAutoCountLog}, ритм ~${gapR}с${best.level > 0 ? `, бот підняв чутливість до ${best.thr}%` : ''}, межа YT ${Math.round(ytAccept * 100)}%)`, state.selected.length > 0 ? 'success' : 'warn');
   updateStatus(
     state.selected.length > 0
       ? (backupCount > 0
@@ -891,17 +1351,21 @@ async function _doAnalyze() {
 // Авто-звіт у Telegram одразу після аналізу: спрацьовує коли вердикт гірший за «ДОБРЕ»
 // (share природних пауз < 0.6 — той самий поріг, що на панелі). Дедуплікація по videoId на 12 годин.
 async function maybeSendAnalysisReport() {
+  if (!MRA_SEND_TG_REPORTS) return;
   try {
     const meta = state.analysisMeta;
     if (!meta || !meta.idealAds) return;
-    const share = (meta.realPauses || 0) / meta.idealAds;
-    // Звітуємо ЛИШЕ коли вердикт гірший за «ДОБРЕ» — той самий поріг, що й на панелі (render.js).
-    // share вже враховує і запасні мітки, і нестачу (природних ≤ поставлених), тому окремої
-    // перевірки нестачі не треба — інакше 7/8 суцільно природних міток лякало б даремно.
-    if (share >= 0.6) return;
+    // Пригнічуємо analysis_warn під час повного авто-циклу: його замінить звіт вставки
+    if (state.fullAutoActive) { console.log('[TSN ANALYZER] 📨 Аналіз-звіт пропущено: йде повний автоцикл — все скаже звіт вставки'); return; }
+    // Звітуємо ЛИШЕ коли ДОБРИХ міток — тих, що пройшли межу прийняття YT — менше 60% від цілі.
+    // Це точніший критерій: раніше рахували лише природні паузи, але запасна з якістю ≥ межі
+    // теж добра, а природна нижче межі — ризикована. Відлякувати даремно не треба.
+    // Якорі YT вже включені в goodCount (quality 1.0 ≥ будь-якого порогу), тому
+    // окремо existingCount не додаємо — вставка все одно зносить ручні мітки.
+    const goodShare = (meta.goodCount ?? meta.realPauses ?? 0) / meta.idealAds;
+    if (goodShare >= 0.6) return;
 
-    const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
-    const videoId = videoIdMatch ? videoIdMatch[1] : (state.waveformUrl || 'unknown').slice(-40);
+    const videoId = getCurrentVideoKey();
 
     // Дедуплікація: не частіше ніж раз на 12 год на відео (читаємо тут, позначаємо ЛИШЕ після успішної відправки)
     const { tgAnalysisReported } = await chrome.storage.local.get('tgAnalysisReported');
@@ -912,34 +1376,40 @@ async function maybeSendAnalysisReport() {
     }
 
     const videoTitle = getVideoTitle();
-    console.log('[TSN ANALYZER] 📨 Надсилаю аналіз-звіт (складний монтаж/мало міток):', { videoTitle, share, selected: state.selected.length, ideal: meta.idealAds });
+    console.log('[TSN ANALYZER] 📨 Надсилаю аналіз-звіт (складний монтаж/мало міток):', { videoTitle, goodShare, selected: state.selected.length, ideal: meta.idealAds });
     // Скільки міток ЗАРАЗ реально стоїть на відео (0 — якщо аналіз іде до вставки)
     let marksOnVideo = 0;
     try { marksOnVideo = getAdBreakDeleteButtons().length; } catch (e) {}
     // Середня якість природних пауз (запасні мають іншу шкалу — не змішуємо)
     const naturalScores = state.selected.filter(s => !s.fallbackSpot && typeof s.quality_score === 'number').map(s => s.quality_score);
     const qualityAvg = naturalScores.length ? Math.round(naturalScores.reduce((a, b) => a + b, 0) / naturalScores.length * 100) : null;
+    // У звіті показуємо ризиковані мітки — ті, що нижче межі прийняття YT (і не підказка YT)
+    const ytAcceptNow = getYtAcceptQuality();
     chrome.runtime.sendMessage({
       action: 'mra_tg_report',
       report: {
         kind: 'analysis_warn',
         ts: Date.now(),
         videoTitle,
-        videoId: videoIdMatch ? videoIdMatch[1] : '',
+        videoId: videoId,
         videoUrl: window.location.href,
         videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
         analysis: meta,
         selectedCount: state.selected.length,
         marksOnVideo,
         qualityAvg,
-        // У звіті показуємо лише запасні мітки — природні і так видно в рахунку
-        marks: state.selected.filter(s => s.fallbackSpot).slice(0, 25).map(s => ({
-          tc: s.timecode,
-          backup: !!s.fallbackSpot,
-          quality: s.quality_label || '',
-          score: typeof s.quality_score === 'number' ? Math.round(s.quality_score * 100) : null,
-          pauseSec: (typeof s.duration_sec === 'number' && s.duration_sec > 0) ? s.duration_sec : null
-        })),
+        // Всі відібрані мітки з прапорцем risky (нижче межі прийняття YT)
+        marks: state.selected.slice(0, 25).map(s => {
+          const isRisky = !s.ytHint && Number(s.quality_score ?? 0) < ytAcceptNow;
+          return {
+            tc: s.timecode,
+            backup: !!s.fallbackSpot,
+            risky: isRisky,
+            quality: s.quality_label || '',
+            score: typeof s.quality_score === 'number' ? Math.round(s.quality_score * 100) : null,
+            pauseSec: (typeof s.duration_sec === 'number' && s.duration_sec > 0) ? s.duration_sec : null
+          };
+        }),
         totalPlanned: 0, ok: 0, fail: 0, events: []
       }
     }, async (res) => {
@@ -977,6 +1447,57 @@ function getAdBreakDeleteButtons() {
 // "У цьому місці реклама навряд чи показуватиметься". Зчитуємо його вердикт
 // і пересуваємо червоні мітки в найближчу сильну паузу, поки YT не прийме.
 
+// Базова межа прийняття YouTube (холодний старт). Далі бот самонавчається:
+// після кожної вставки записує пари (якість → вердикт YT) і коригує межу.
+// 0.60 — правильний старт на стабільній шкалі (QUALITY_REF = avgAbs*0.35):
+// типові якісні паузи дають ~0.6–0.7, тому 0.70 (старе значення, скалібровано
+// на legacy шкалі) відкидало занадто багато реальних пауз. Реальний гейткіпер —
+// verifyAndFixFlaggedBreaks: червоні мітки не виживають, і кожен вердикт YT
+// зміщує межу до справжнього порогу через самонавчання.
+var YT_ACCEPT_QUALITY_DEFAULT = 0.60;
+var _qualityCalib = null; // кеш калібрування з chrome.storage: { samples: [{q, ok, ts}] }
+
+// Поточна межа прийняття: за вердиктами YouTube, у безпечних рамках [0.55..0.90].
+function getYtAcceptQuality() {
+  const samples = (_qualityCalib && Array.isArray(_qualityCalib.samples)) ? _qualityCalib.samples : [];
+  const rejected = samples.filter(s => !s.ok).map(s => s.q).sort((a, b) => a - b);
+  const accepted = samples.filter(s => s.ok).map(s => s.q).sort((a, b) => a - b);
+  // Замало даних — тримаємо холодний старт
+  if (samples.length < 8 || rejected.length < 3) return YT_ACCEPT_QUALITY_DEFAULT;
+  // Межа: трохи вище 90-го перцентиля ВІДХИЛЕНИХ (стійко до викидів),
+  // але зі СТЕЛЕЮ на рівні 25-го перцентиля ПРИЙНЯТИХ — щоб серія дивних відмов
+  // YT на якісних паузах не задерла межу вище робочих пауз і не лишила бота без міток.
+  const p = (arr, q) => arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : null;
+  const fromRejected = p(rejected, 0.9) + 0.02;
+  const acceptedCap = accepted.length >= 5 ? Math.max(0.65, p(accepted, 0.25)) : 0.90;
+  const bound = Math.min(fromRejected, acceptedCap);
+  return Math.min(0.90, Math.max(0.55, +bound.toFixed(3)));
+}
+
+// Завантаження калібрування (лінива ініціалізація на старті аналізу)
+async function loadQualityCalib() {
+  if (_qualityCalib) return;
+  try {
+    const data = await chrome.storage.local.get('mraQualityCalib');
+    _qualityCalib = data.mraQualityCalib || { samples: [] };
+  } catch (e) { _qualityCalib = { samples: [] }; }
+}
+
+// Запис нових вердиктів YT (натуральні паузи та запасні — одна шкала якості)
+async function recordQualityVerdicts(points) {
+  if (!points.length) return;
+  try {
+    await loadQualityCalib();
+    const now = Date.now();
+    _qualityCalib.samples.push(...points.map(pt => ({ q: +pt.q.toFixed(3), ok: !!pt.ok, ts: now })));
+    // Тримаємо останні 300 зразків і не старші за 60 діб
+    const cutoff = now - 60 * 24 * 3600 * 1000;
+    _qualityCalib.samples = _qualityCalib.samples.filter(s => s.ts >= cutoff).slice(-300);
+    await chrome.storage.local.set({ mraQualityCalib: _qualityCalib });
+    log(`📚 Самонавчання: +${points.length} вердиктів YT, межа прийняття тепер ${Math.round(getYtAcceptQuality() * 100)}%`, 'info');
+  } catch (e) { console.warn('[TSN ANALYZER] calib save failed', e); }
+}
+
 var YT_FLAG_TEXT_FRAGMENTS = [
   'перемістіть рекламне місце', 'навряд чи показуватиметься', 'природних паузах',
   'move the ad break', 'unlikely to be shown', 'natural pauses',
@@ -985,15 +1506,65 @@ var YT_FLAG_TEXT_FRAGMENTS = [
 
 function getAdBreakRows() {
   const rows = [];
+  const AUTO_RE = /автоматичн|автоматическ|automatic/i;
+  const MANUAL_RE = /вручну|вибране|manual/i;
   getAdBreakDeleteButtons().forEach(btn => {
     const row = btn.closest('ytve-ad-break-row')
       || btn.closest('div[role="row"]')
       || btn.closest('div.style-scope.ytve-ad-breaks-editor')
       || btn.parentElement;
     const input = row ? row.querySelector('input') : null;
-    if (row && input && !rows.some(r => r.row === row)) rows.push({ row, input, btn });
+    if (!row || !input || rows.some(r => r.row === row)) return;
+
+    // Класифікація рядка: підіймаємось до контейнера з текстом лейбла,
+    // але не вище за межі ОДНОГО рядка (контейнер з одним input)
+    let labelEl = row;
+    for (let i = 0; i < 5; i++) {
+      const txt = labelEl.textContent || '';
+      if (AUTO_RE.test(txt) || MANUAL_RE.test(txt)) break;
+      const parent = labelEl.parentElement;
+      if (!parent || parent.querySelectorAll('input').length > 1) break;
+      labelEl = parent;
+    }
+    const isAuto = AUTO_RE.test(labelEl.textContent || '');
+    rows.push({ row, input, btn, isAuto });
   });
   return rows;
+}
+
+// Зчитує мітки, які ВЖЕ стоять на відео — ЛИШЕ ручні («вибране вручну»).
+// «Автоматичні рекламні місця» YouTube пропускаємо: вони зберігаються окремо
+// у readYtAutoMarks() як 100%-якорі плану.
+function readExistingAdBreaks() {
+  const marks = [];
+  try {
+    for (const r of getAdBreakRows()) {
+      if (r.isAuto) continue; // автоматичні — лише в readYtAutoMarks()
+      const sec = fromTimecode(r.input.value);
+      if (sec == null || !isFinite(sec)) continue;
+      if (marks.some(m => Math.abs(m.seconds - sec) < 0.5)) continue;
+      marks.push({ seconds: +sec.toFixed(2), timecode: r.input.value });
+    }
+  } catch (e) { /* редактор ще не домальований — вважаємо що міток нема */ }
+  return marks.sort((a, b) => a.seconds - b.seconds);
+}
+
+// Зчитує авто-мітки YouTube («Рекламне місце (автоматичне)»).
+// Це позиції, де YT 100% вважає паузу природною — запам'ятовуємо їх як якорі плану,
+// бо при вставці бот знімає чекбокс «Автоматичні рекламні місця» і вони зникають,
+// тому треба включити їх у state.selected ДО вставки.
+function readYtAutoMarks() {
+  const marks = [];
+  try {
+    for (const r of getAdBreakRows()) {
+      if (!r.isAuto) continue;
+      const sec = fromTimecode(r.input.value);
+      if (sec == null || !isFinite(sec)) continue;
+      if (marks.some(m => Math.abs(m.seconds - sec) < 0.5)) continue;
+      marks.push({ seconds: +sec.toFixed(2), timecode: r.input.value });
+    }
+  } catch (e) { /* редактор ще не домальований */ }
+  return marks.sort((a, b) => a.seconds - b.seconds);
 }
 
 function isAdBreakRowFlagged(row) {
@@ -1029,7 +1600,10 @@ function pickReplacementPause(badSec, excludeSecs) {
     };
   }
 
+  // Фільтруємо лише паузи вище межі прийняття YT — немає сенсу пересувати мітку
+  // в іншу паузу, яку YouTube так само позначить червоним.
   const cands = (state.silences || [])
+    .filter(p => Number(p.quality_score ?? 0) >= getYtAcceptQuality())
     .filter(p => !excludeSecs.some(x => Math.abs(x - p.seconds) < 3))
     .map(p => ({ p, d: Math.abs(p.seconds - badSec) }))
     .filter(c => c.d > 0.5 && c.d <= 45)
@@ -1037,24 +1611,50 @@ function pickReplacementPause(badSec, excludeSecs) {
   return cands.length ? cands[0].p : null;
 }
 
-async function verifyAndFixFlaggedBreaks() {
-  await sleep(1500);
+// Чекаємо, поки YouTube домалює вердикти: вони з'являються асинхронно і з запізненням.
+// Вважаємо вердикти готовими, коли кількість попереджень не змінюється 3 перевірки
+// поспіль і минуло щонайменше 4с. Стеля очікування — 12с (+запас на великі списки).
+async function waitForYtVerdicts(maxMs = 12000) {
+  const t0 = Date.now();
+  let prev = -1;
+  let stableTicks = 0;
+  while (Date.now() - t0 < maxMs) {
+    const rows = getAdBreakRows();
+    const flaggedCnt = rows.filter(r => isAdBreakRowFlagged(r.row)).length;
+    if (flaggedCnt === prev) stableTicks++; else stableTicks = 0;
+    prev = flaggedCnt;
+    if (stableTicks >= 3 && Date.now() - t0 >= 4000) break;
+    await sleep(700);
+  }
+  return prev;
+}
 
+async function verifyAndFixFlaggedBreaks() {
   let rows = getAdBreakRows();
   if (!rows.length) {
     log('🩺 Перевірка YT: рядків міток у редакторі не знайдено', 'warn');
     return { checked: 0, flagged: 0, fixed: 0, removed: 0 };
   }
-
-  // YT оцінює рядки асинхронно — на великій кількості міток вердикти
-  // з'являються із запізненням, даємо пропорційний запас
-  if (rows.length > 8) {
-    await sleep(Math.min(3000, rows.length * 70));
-    rows = getAdBreakRows();
-  }
+  // Великі списки YT оцінює довше — даємо пропорційний запас до стелі
+  await waitForYtVerdicts(12000 + Math.min(6000, rows.length * 200));
+  rows = getAdBreakRows();
 
   let flagged = rows.filter(r => isAdBreakRowFlagged(r.row));
   log(`🩺 Перевірка YT: міток ${rows.length}, з попередженням YouTube: ${flagged.length}`, flagged.length ? 'warn' : 'success');
+
+  // ── Самонавчання: записуємо первинний вердикт YT для кожної нашої мітки ──
+  // fromYt мітки виключаємо: їх quality 1.0 синтетична, запис спотворить калібрування.
+  try {
+    const points = [];
+    for (const r of rows) {
+      const sec = fromTimecode(r.input.value);
+      if (sec == null) continue;
+      const sel = state.selected.find(s => Math.abs(s.seconds - sec) < 2);
+      if (!sel || sel.ytHint || sel.fromYt || sel.movedByYtCheck || typeof sel.quality_score !== 'number') continue;
+      points.push({ q: sel.quality_score, ok: !isAdBreakRowFlagged(r.row) });
+    }
+    recordQualityVerdicts(points); // без await — не блокуємо основний потік
+  } catch (e) { /* ignore */ }
 
   if (!flagged.length) {
     updateStatus('🩺 YouTube прийняв усі мітки (червоних попереджень немає)', 'success');
@@ -1063,93 +1663,163 @@ async function verifyAndFixFlaggedBreaks() {
 
   updateStatus(`🩺 YouTube позначив ${flagged.length} міток. Пересуваємо у природні паузи...`, 'info');
   const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  // Зберігаємо початкову кількість позначених міток для звітності
+  const flaggedInitialCount = flagged.length;
   let fixed = 0;
 
-  for (const fr of flagged) {
+  for (let pass = 1; pass <= 2; pass++) {
     if (state.insertAbort) break;
-
-    const badSec = fromTimecode(fr.input.value);
-    if (badSec == null) continue;
-
-    const tried = [badSec];
-    let cleared = false;
-
-    for (let attempt = 0; attempt < 3 && !cleared; attempt++) {
-      const takenSecs = getAdBreakRows()
-        .map(r => fromTimecode(r.input.value))
-        .filter(v => v != null && Math.abs(v - badSec) > 0.5);
-
-      const cand = pickReplacementPause(badSec, takenSecs.concat(tried));
-      if (!cand) break;
-      tried.push(cand.seconds);
-
-      const tc = toTimecode(cand.seconds);
-      nativeSetter.call(fr.input, tc);
-      fr.input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      fr.input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      fr.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, composed: true }));
-      // Буфер на переоцінку YT, далі чекаємо ФАКТ зникнення попередження (або таймаут)
-      await sleep(700);
-      await waitFor(() => {
-        const fresh = getAdBreakRows().find(r => r.input.value === tc) || fr;
-        return !isAdBreakRowFlagged(fresh.row);
-      }, 1300);
-
-      // Після зміни часу YT може пересортувати рядки → шукаємо рядок заново за значенням
-      const freshRows = getAdBreakRows();
-      const freshRow = freshRows.find(r => r.input.value === tc) || fr;
-
-      if (!isAdBreakRowFlagged(freshRow.row)) {
-        cleared = true;
-        fixed++;
-        // ── Telegram: мітку успішно пересунуто ──
-        state.tgEvents.push({ type: 'yt_flag_moved', fromTc: toTimecode(badSec), toTc: tc });
-
-        const sel = state.selected.find(s => Math.abs(s.seconds - badSec) < 2);
-        if (sel) {
-          sel.seconds = cand.seconds;
-          sel.timecode = tc;
-          sel.duration_sec = cand.duration_sec;
-          sel.ideal_duration_sec = cand.ideal_duration_sec;
-          sel.quality_score = cand.quality_score;
-          sel.quality_label = cand.quality_label;
-          sel.fallbackSpot = false;
-          sel.movedByYtCheck = true;
-        }
-        log(`🩺 ${toTimecode(badSec)} → ${tc} (YouTube прийняв нове місце)`, 'success');
-      }
+    if (pass > 1) {
+      // Після пересувань YT переоцінює рядки — чекаємо нові вердикти і добиваємо те, що лишилось
+      await waitForYtVerdicts(8000);
+      flagged = getAdBreakRows().filter(r => isAdBreakRowFlagged(r.row));
+      if (!flagged.length) break;
+      log(`🩺 Прохід ${pass}: YouTube ще позначає ${flagged.length} міток — повторне пересування`, 'warn');
     }
 
-    if (!cleared) {
-      log(`🩺 ${fr.input.value}: YT-попередження не зникло — поряд немає паузи, яку YouTube вважає природною`, 'warn');
-      // ── Telegram: мітку не вдалось пересунути (3 спроби) ──
-      state.tgEvents.push({ type: 'yt_flag_stuck', atTc: fr.input.value });
+    for (const fr of flagged) {
+      if (state.insertAbort) break;
+
+      const badSec = fromTimecode(fr.input.value);
+      if (badSec == null) continue;
+
+      const tried = [badSec];
+      let cleared = false;
+
+      for (let attempt = 0; attempt < 3 && !cleared; attempt++) {
+        const takenSecs = getAdBreakRows()
+          .map(r => fromTimecode(r.input.value))
+          .filter(v => v != null && Math.abs(v - badSec) > 0.5);
+
+        const cand = pickReplacementPause(badSec, takenSecs.concat(tried));
+        if (!cand) break;
+        tried.push(cand.seconds);
+
+        const tc = toTimecode(cand.seconds);
+        nativeSetter.call(fr.input, tc);
+        fr.input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        fr.input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        fr.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, composed: true }));
+        // Буфер на переоцінку YT, далі чекаємо ФАКТ зникнення попередження (або таймаут)
+        await sleep(700);
+        await waitFor(() => {
+          const fresh = getAdBreakRows().find(r => r.input.value === tc) || fr;
+          return !isAdBreakRowFlagged(fresh.row);
+        }, 1300);
+
+        // Після зміни часу YT може пересортувати рядки → шукаємо рядок заново за значенням
+        const freshRows = getAdBreakRows();
+        const freshRow = freshRows.find(r => r.input.value === tc) || fr;
+
+        if (!isAdBreakRowFlagged(freshRow.row)) {
+          cleared = true;
+          fixed++;
+          // ── Telegram: мітку успішно пересунуто ──
+          state.tgEvents.push({ type: 'yt_flag_moved', fromTc: toTimecode(badSec), toTc: tc });
+
+          const sel = state.selected.find(s => Math.abs(s.seconds - badSec) < 2);
+          if (sel) {
+            sel.seconds = cand.seconds;
+            sel.timecode = tc;
+            sel.duration_sec = cand.duration_sec;
+            sel.ideal_duration_sec = cand.ideal_duration_sec;
+            sel.quality_score = cand.quality_score;
+            sel.quality_label = cand.quality_label;
+            sel.fallbackSpot = false;
+            sel.movedByYtCheck = true;
+          }
+          log(`🩺 ${toTimecode(badSec)} → ${tc} (YouTube прийняв нове місце)`, 'success');
+        }
+      }
+
+      // Звіт «застрягла» лише на фінальному проході — щоб не дублювати подію,
+      // якщо мітка не пройшла пас 1, але пройде пас 2.
+      if (!cleared && pass === 2) {
+        log(`🩺 ${fr.input.value}: YT-попередження не зникло — поряд немає паузи, яку YouTube вважає природною`, 'warn');
+        // ── Telegram: мітку не вдалось пересунути (вичерпано всі проходи) ──
+        state.tgEvents.push({ type: 'yt_flag_stuck', atTc: fr.input.value });
+      }
     }
   }
 
-  // ФІНАЛЬНА ЗАЧИСТКА (авто-пілот): мітки, які YouTube так і не прийняв, видаляємо.
-  // Червона мітка все одно не покаже рекламу — краще менше міток, але всі робочі.
+  // ФІНАЛЬНИЙ КРОК — РОЗУМНИЙ РЕЖИМ: мітки, які YouTube не прийняв (⚠️), видаляємо,
+  // ЩОБ лишались тільки правильні. АЛЕ якщо без них загальна кількість впаде нижче
+  // ~60% цілі — повертаємо найкращі із забракованих (обираємо найрівномірніше, щоб
+  // заповнити найбільші діри), аби ритм реклами не провисав. Так на відео з паузами
+  // лишаються майже самі чисті мітки, а на щільному монтажі — додаються запасні для
+  // ритму. Бот уже намагався пересунути червоні мітки у природні паузи в пасах 1-2.
+  const SMART_FLOOR_RATIO = 0.6;
   let removed = 0;
+  let kept = 0;
   if (CONFIG.autoGap && !state.insertAbort) {
-    await sleep(800); // даємо YT домалювати вердикти після пересувань
-    const stillFlagged = getAdBreakRows().filter(r => isAdBreakRowFlagged(r.row));
+    await waitForYtVerdicts(6000); // даємо YT домалювати вердикти після пересувань
+    const allRows = getAdBreakRows();
+    const flaggedRows = allRows.filter(r => isAdBreakRowFlagged(r.row));
+    const acceptedCount = allRows.length - flaggedRows.length;
 
-    for (const fr of stillFlagged) {
+    // Підлога: щонайменше ~60% цілі мусить лишитись на відео
+    const ideal = (state.analysisMeta && state.analysisMeta.idealAds)
+      || Math.max(1, Math.floor(((state.waveformData && state.waveformData.duration) || 0) / 120));
+    const floorCount = Math.ceil(ideal * SMART_FLOOR_RATIO);
+
+    // Скільки забракованих лишити, щоб дотягнути до підлоги
+    const keepFlaggedTarget = Math.min(flaggedRows.length, Math.max(0, floorCount - acceptedCount));
+
+    // Обираємо, які забраковані ЛИШИТИ: жадібно заповнюємо найбільші діри —
+    // щоразу беремо мітку, найдальшу від уже-обраних точок (рівномірний ритм).
+    const secOf = (r) => fromTimecode(r.input.value);
+    const keepSet = new Set();
+    if (keepFlaggedTarget > 0) {
+      const chosenSec = allRows
+        .filter(r => !flaggedRows.includes(r))
+        .map(secOf).filter(v => v != null); // опори — уже прийняті (чисті) мітки
+      const candidates = flaggedRows.map(r => ({ r, sec: secOf(r) })).filter(c => c.sec != null);
+      for (let i = 0; i < keepFlaggedTarget; i++) {
+        let best = null, bestDist = -1;
+        for (const c of candidates) {
+          if (keepSet.has(c.r)) continue;
+          const nearest = chosenSec.length ? Math.min(...chosenSec.map(s => Math.abs(s - c.sec))) : Infinity;
+          if (nearest > bestDist) { bestDist = nearest; best = c; }
+        }
+        if (!best) break;
+        keepSet.add(best.r);
+        chosenSec.push(best.sec);
+      }
+    }
+
+    for (const fr of flaggedRows) {
       if (state.insertAbort) break;
       const tcLabel = fr.input.value;
       const sec = fromTimecode(tcLabel);
 
-      fr.btn.click();
-      await waitFor(() => !document.contains(fr.row), 1500);
-      removed++;
-
-      if (sec != null) {
-        const i = state.selected.findIndex(s => Math.abs(s.seconds - sec) < 1);
-        if (i >= 0) state.selected.splice(i, 1);
+      if (keepSet.has(fr)) {
+        // Лишаємо з попередженням — позначаємо, щоб метрики/калібрування були чесні
+        kept++;
+        if (sec != null) {
+          const selMark = state.selected.find(s => Math.abs(s.seconds - sec) < 1);
+          if (selMark) selMark.ytFlaggedKept = true;
+        }
+        if (!state.tgEvents.some(ev => ev.type === 'yt_flag_stuck' && ev.atTc === tcLabel)) {
+          state.tgEvents.push({ type: 'yt_flag_stuck', atTc: tcLabel });
+        }
+        log(`⚠️ ${tcLabel}: YouTube попереджає — ЛИШАЮ (тримаю ритм, розумний режим)`, 'warn');
+      } else {
+        // Видаляємо — є чим тримати ритм без цієї мітки
+        fr.btn.click();
+        await waitFor(() => !document.contains(fr.row), 1500);
+        removed++;
+        if (sec != null) {
+          const i = state.selected.findIndex(s => Math.abs(s.seconds - sec) < 1);
+          if (i >= 0) state.selected.splice(i, 1);
+        }
+        // Прибираємо застарілу подію 'stuck' для цієї мітки (її видалено, не лишено)
+        state.tgEvents = state.tgEvents.filter(ev => !(ev.type === 'yt_flag_stuck' && ev.atTc === tcLabel));
+        log(`🗑️ ${tcLabel}: YouTube не прийняв це місце — видалено (є чим тримати ритм)`, 'warn');
+        state.tgEvents.push({ type: 'yt_flag_removed', atTc: tcLabel });
       }
-      log(`🗑️ ${tcLabel}: YouTube не прийняв це місце — мітку видалено`, 'warn');
-      // ── Telegram: мітку видалено бо YouTube не прийняв ──
-      state.tgEvents.push({ type: 'yt_flag_removed', atTc: tcLabel });
+    }
+    if (kept || removed) {
+      log(`🧠 Розумний режим: ${acceptedCount} чистих + ${kept} лишених для ритму (підлога ${floorCount}), видалено ${removed}`, 'info');
     }
   }
 
@@ -1157,18 +1827,16 @@ async function verifyAndFixFlaggedBreaks() {
   renderSelectedList();
   renderWaveform();
 
-  const remaining = flagged.length - fixed - removed;
   const parts = [];
   if (fixed) parts.push(`${fixed} переміщено`);
   if (removed) parts.push(`${removed} видалено`);
+  if (kept) parts.push(`${kept} лишено для ритму`);
   updateStatus(
-    remaining <= 0
-      ? `🩺 Вердикт YT: ${parts.join(', ') || 'все чисто'}. Лишилось міток: ${getAdBreakRows().length} — всі робочі`
-      : `🩺 Вердикт YT: ${parts.join(', ')}. Червоних лишилось: ${remaining}`,
-    remaining <= 0 ? 'success' : 'warn'
+    `🩺 Вердикт YT (розумний режим): ${parts.join(', ') || 'усе чисто'}. Лишилось міток: ${getAdBreakRows().length}`,
+    'success'
   );
 
-  return { checked: rows.length, flagged: flagged.length, fixed, removed };
+  return { checked: rows.length, flagged: flaggedInitialCount, fixed, removed, kept };
 }
 
 // Ручний запуск з консолі для діагностики
@@ -1186,11 +1854,22 @@ async function maybeFullAutoRun() {
 
     state.autoRunUrl = state.waveformUrl;
 
-    // Даємо редактору дозавантажитись, потім перевіряємо, що відео ще без міток
-    await sleep(2500);
-    if (!document.getElementById('mra-panel')) return;
-    if (getAdBreakDeleteButtons().length > 0) {
-      log('⚡ Авто-вставка: на відео вже є мітки — вставку пропускаю (нічого не чіпаю)', 'info');
+    // Чекаємо ФАКТ готовності редактора (а не фіксовану паузу) — на повільному з'єднанні
+    // 2.5с фіксованого sleep інколи не вистачало: редактор ще не домальований,
+    // readExistingAdBreaks() повертав [] і бот вважав відео порожнім, знісши ручні мітки.
+    const editorReady = await waitFor(() => document.querySelector('ytve-ad-breaks-editor') && findInsertAdBreakButton(), 20000, 300);
+    if (!document.getElementById('mra-panel')) return; // панель могли закрити за час очікування
+
+    if (!editorReady) {
+      state.autoRunUrl = null; // дозволяємо повторну спробу при наступному тригері
+      log('⚡ Авто-вставка: редактор не догрузився за 20с — вставку скасовано, спробую пізніше', 'warn');
+      return;
+    }
+
+    // Кнопка вставки з'являється раніше за самі рядки наявних міток — даємо їм домалюватись.
+    await sleep(1200);
+    if (readExistingAdBreaks().length > 0) {
+      log('⚡ Авто-вставка: на відео вже є ручні мітки — вставку пропускаю (їх видно на вейвформі після аналізу; щоб доставити відсутні — натисніть «Аналізувати» і «Вставити» вручну)', 'info');
       // Але аналіз все одно запускаємо: якщо монтаж складний — Telegram-звіт піде і без вставки
       // (maybeSendAnalysisReport усередині analyzeWaveform, з дедуплікацією 12 год по відео)
       if (!state.analysisMeta && !state.analyzing) {
@@ -1200,40 +1879,45 @@ async function maybeFullAutoRun() {
       return;
     }
 
-    log('⚡ Авто-вставка: запускаю повний цикл (аналіз → вставка → перевірка YT → збереження)', 'success');
+    log('⚡ Авто-вставка: запускаю повний цикл (аналіз → вставка → збереження)', 'success');
     showHud('⚡ Повний автопілот: аналізую відео...', 'info', 2500);
 
-    const ok = await analyzeWaveform();
-    if (!ok || !state.selected.length) {
-      log('⚡ Авто-вставка: аналіз не дав позицій — зупиняюсь', 'warn');
-      // ── Telegram: КРИТИЧНО — мітки поставити нікуди (монтаж встик) ──
-      try {
-        if (ok) { // аналіз пройшов, але позицій нема — це «встик», а не технічний збій
-          const videoTitle = getVideoTitle();
-          const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
-          console.log('[TSN ANALYZER] 📨 Sending "no_spots" Telegram report for:', videoTitle);
-          chrome.runtime.sendMessage({
-            action: 'mra_tg_report',
-            report: {
-              kind: 'no_spots',
-              ts: Date.now(),
-              videoTitle,
-              videoId: videoIdMatch ? videoIdMatch[1] : '',
-              videoUrl: window.location.href,
-              videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
-              analysis: state.analysisMeta || null,
-              totalPlanned: 0, ok: 0, fail: 0, events: []
-            }
-          });
+    state.fullAutoActive = true; // Пригнічуємо analysis_warn: звіт вставки замінить його
+    try {
+      const ok = await analyzeWaveform();
+      if (!ok || !state.selected.length) {
+        log('⚡ Авто-вставка: аналіз не дав позицій — зупиняюсь', 'warn');
+        // ── Telegram: КРИТИЧНО — мітки поставити нікуди (монтаж встик) ──
+        try {
+          if (MRA_SEND_TG_REPORTS && ok) { // аналіз пройшов, але позицій нема — це «встик», а не технічний збій
+            const videoTitle = getVideoTitle();
+            const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
+            console.log('[TSN ANALYZER] 📨 Sending "no_spots" Telegram report for:', videoTitle);
+            chrome.runtime.sendMessage({
+              action: 'mra_tg_report',
+              report: {
+                kind: 'no_spots',
+                ts: Date.now(),
+                videoTitle,
+                videoId: videoIdMatch ? videoIdMatch[1] : '',
+                videoUrl: window.location.href,
+                videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
+                analysis: state.analysisMeta || null,
+                totalPlanned: 0, ok: 0, fail: 0, events: []
+              }
+            });
+          }
+        } catch (e) {
+          console.error('[TSN ANALYZER] ❌ Error sending "no_spots" report:', e);
         }
-      } catch (e) {
-        console.error('[TSN ANALYZER] ❌ Error sending "no_spots" report:', e);
+        return;
       }
-      return;
-    }
 
-    await sleep(600);
-    await insertTimecodes(); // далі сам: перевірка вердикту YT + автозбереження
+      await sleep(600);
+      await insertTimecodes(); // далі сам: перевірка вердикту YT + автозбереження
+    } finally {
+      state.fullAutoActive = false; // Завжди скидаємо, навіть при помилці або ранньому return
+    }
   } catch (e) {
     log('⚡ Авто-вставка: помилка — ' + e.message, 'error');
   }
@@ -1259,9 +1943,39 @@ async function insertTimecodes() {
   // ── Скидаємо буфер Telegram-подій перед новою вставкою ──
   state.tgEvents = [];
 
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, skippedDup = 0;
 
   try {
+    // YouTube вміє підмішувати власні «автоматичні рекламні місця» поруч із нашими —
+    // вимикаємо чекбокс, щоб розстановкою керував лише бот (бойовий кейс: дубль за 6с).
+    const autoAdsCb = findAutoAdsCheckbox();
+    if (autoAdsCb && autoAdsCb.getAttribute('aria-checked') === 'true') {
+      log('⚙️ Вимикаю «Автоматичні рекламні місця» YouTube — мітки ставить лише бот', 'info');
+      autoAdsCb.click();
+      await sleep(400);
+    }
+
+    // Зносимо ВСІ мітки, що лишились (якщо не увімкнено збереження ручних міток).
+    // При CONFIG.preserveManualMarks ручні мітки залишаються і нові просто доставляються у прогалини.
+    if (!CONFIG.preserveManualMarks || !state.existingMarks || state.existingMarks.length === 0) {
+      let delBtns = getAdBreakDeleteButtons();
+      if (delBtns.length > 0) {
+        log(`🗑️ Прибираю ${delBtns.length} старих міток — план ставиться з нуля`, 'info');
+        let deleted = 0; const totalToDelete = delBtns.length;
+        while (true) {
+          delBtns = getAdBreakDeleteButtons();
+          if (delBtns.length === 0) break;
+          const beforeCount = delBtns.length;
+          delBtns[delBtns.length - 1].click();
+          deleted++;
+          await waitFor(() => getAdBreakDeleteButtons().length < beforeCount, 1200);
+          if (deleted > totalToDelete + 10) break;
+        }
+      }
+    } else {
+      log(`🛡️ Зберігаємо ${state.existingMarks.length} існуючих ручних міток — старі мітки не видаляються`, 'info');
+    }
+
     updateStatus(`⏳ Вставляємо ${pendingSilences.length} нових міток...`, 'info');
     updateProgress(0, pendingSilences.length);
     showStopButton(true);
@@ -1272,11 +1986,27 @@ async function insertTimecodes() {
         break;
       }
       const s = pendingSilences[idx];
+
+      // Захист від дублів: поруч уже стоїть РУЧНА мітка (поставлена раніше або вручну).
+      // Авто-мітки YouTube тут не рахуються (readExistingAdBreaks їх фільтрує) —
+      // сусідство з авто-міткою не повинно блокувати ботову, бо авто-шар динамічний.
+      const dupMark = readExistingAdBreaks().find(m => Math.abs(m.seconds - s.seconds) < 3);
+      if (dupMark) {
+        s.inserted = true;
+        skippedDup++;
+        log(`⏭️ ${s.timecode}: за 3с уже стоїть мітка ${dupMark.timecode} — пропускаю (дубль)`, 'warn');
+        renderSelectedList();
+        updateProgress(ok, pendingSilences.length);
+        continue;
+      }
+
       log(`[${idx + 1}/${pendingSilences.length}] Вставка: ${s.timecode}`, 'info');
 
       try {
-        // 1. Запам'ятовуємо кількість міток ДО
+        // 1. Запам'ятовуємо стан міток ДО
         const deleteBtnsBefore = getAdBreakDeleteButtons();
+        const beforeRowSet = new Set(getAdBreakRows().map(r => r.row));
+        const beforeBtnSet = new Set(deleteBtnsBefore);
 
         // 2. ІМІТАЦІЯ ЛЮДИНИ: Вводимо час в ГОЛОВНИЙ інпут плеєра
         const timeInputs = Array.from(document.querySelectorAll('input.ytcp-media-timestamp-input, ytcp-media-timestamp-input input'));
@@ -1320,38 +2050,45 @@ async function insertTimecodes() {
         if (!appeared) throw new Error('Рядок мітки не з\'явився у списку');
         await sleep(document.hidden ? 250 : 120); // мікро-осідання DOM після появи рядка
 
+        // 4. Визначаємо додані рядки
+        const afterRows = getAdBreakRows();
+        const addedRows = afterRows.filter(r => !beforeRowSet.has(r.row));
+
         // ----------------------------------------------------------------------
-        // ПЕРЕВІРКА ЧАСУ: звіряємо останній доданий рядок з нашим таймкодом.
+        // ПЕРЕВІРКА ЧАСУ: звіряємо доданий рядок з нашим таймкодом.
         // Ловить і фоновий глюк 00:00, і недосинхронізований плейхед на швидкому темпі.
         // ----------------------------------------------------------------------
-        const currentDeleteBtns = getAdBreakDeleteButtons();
-        if (currentDeleteBtns.length > 0) {
-            const lastDeleteBtn = currentDeleteBtns[currentDeleteBtns.length - 1];
-            const row = lastDeleteBtn.closest('ytve-ad-break-row') || lastDeleteBtn.closest('div[role="row"]') || lastDeleteBtn.closest('div.style-scope.ytve-ad-breaks-editor');
+        const targetRow = (addedRows.length > 0 && addedRows[0]?.row)
+          ? addedRows[0].row
+          : (() => {
+              const currentDeleteBtns = getAdBreakDeleteButtons();
+              if (currentDeleteBtns.length === 0) return null;
+              const lastBtn = currentDeleteBtns[currentDeleteBtns.length - 1];
+              return lastBtn.closest('ytve-ad-break-row') || lastBtn.closest('div[role="row"]') || lastBtn.closest('div.style-scope.ytve-ad-breaks-editor');
+            })();
 
-            if (row) {
-                const rowInput = row.querySelector('input');
-                // Порівнюємо за секундами (формат може відрізнятись), допуск < 0.3с
-                let rowSec = NaN;
-                try { rowSec = fromTimecode(rowInput ? rowInput.value : ''); } catch (e) {}
-                if (rowInput && !(Math.abs(rowSec - s.seconds) < 0.3)) {
-                    log(`Виправляємо хибний час ${rowInput.value} -> ${s.timecode}`, 'warn');
+        if (targetRow) {
+            const rowInput = targetRow.querySelector('input');
+            // Порівнюємо за секундами (формат може відрізнятись), допуск < 0.3с
+            let rowSec = NaN;
+            try { rowSec = fromTimecode(rowInput ? rowInput.value : ''); } catch (e) {}
+            if (rowInput && !(Math.abs(rowSec - s.seconds) < 0.3)) {
+                log(`Виправляємо хибний час ${rowInput.value} -> ${s.timecode}`, 'warn');
 
-                    nativeSetter.call(rowInput, s.timecode);
-                    rowInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-                    rowInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-                    rowInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, composed: true }));
+                nativeSetter.call(rowInput, s.timecode);
+                rowInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                rowInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                rowInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, composed: true }));
 
-                    // Чекаємо ФАКТ: інпут рядка показує правильний час
-                    const timeFixed = await waitFor(() => {
-                      try { return Math.abs(fromTimecode(rowInput.value) - s.seconds) < 0.3; } catch (e) { return false; }
-                    }, 1500);
-                    // ── Telegram: хибний час не вдалося виправити ──
-                    if (!timeFixed) {
-                      state.tgEvents.push({ type: 'time_mismatch', plannedSec: s.seconds, plannedTc: s.timecode, actualTc: rowInput.value, quality: s.quality_label || '' });
-                    }
-                    await sleep(150);
+                // Чекаємо ФАКТ: інпут рядка показує правильний час
+                const timeFixed = await waitFor(() => {
+                  try { return Math.abs(fromTimecode(rowInput.value) - s.seconds) < 0.3; } catch (e) { return false; }
+                }, 1500);
+                // ── Telegram: хибний час не вдалося виправити ──
+                if (!timeFixed) {
+                  state.tgEvents.push({ type: 'time_mismatch', plannedSec: s.seconds, plannedTc: s.timecode, actualTc: rowInput.value, quality: s.quality_label || '' });
                 }
+                await sleep(150);
             }
         }
         // ----------------------------------------------------------------------
@@ -1363,11 +2100,15 @@ async function insertTimecodes() {
         if (created > 1) {
           log(`⚠️ YouTube створив ${created} записів замість 1, видаляємо ${created - 1} зайвих...`, 'warn');
           for (let d = 0; d < created - 1; d++) {
-            const beforeDel = getAdBreakDeleteButtons();
-            if (beforeDel.length > 0) {
-              beforeDel[beforeDel.length - 1].click();
+            const currentBtns = getAdBreakDeleteButtons();
+            const newBtns = currentBtns.filter(b => !beforeBtnSet.has(b));
+            // Залишаємо першу нову кнопку (індекс 0), видаляємо додаткові (від індексу 1 onward)
+            const btnToDelete = (newBtns.length > 1) ? newBtns[1] : currentBtns[currentBtns.length - 1];
+            if (btnToDelete) {
+              const beforeCount = currentBtns.length;
+              btnToDelete.click();
               // Чекаємо ФАКТ: рядок зник зі списку
-              await waitFor(() => getAdBreakDeleteButtons().length < beforeDel.length, 1500);
+              await waitFor(() => getAdBreakDeleteButtons().length < beforeCount, 1500);
             }
           }
           await sleep(150);
@@ -1398,16 +2139,19 @@ async function insertTimecodes() {
 
     if (aborted) {
       updateStatus(`⛔ Зупинено! Вставлено ${ok} з ${pendingSilences.length}`, 'warn');
+    } else if (ok === 0 && skippedDup > 0) {
+      updateStatus(`✅ Всі ${skippedDup} міток уже стоять на відео — нічого вставляти`, 'success');
     } else {
+      const dupSuffix = skippedDup > 0 ? ` (${skippedDup} пропущено як дублі)` : '';
       updateStatus(
-        fail === 0 ? `🏁 Готово! ${ok} нових міток вставлено. Натисніть "Зберегти"!` : `⚠️ Вставлено: ${ok}, помилок: ${fail}`,
+        fail === 0 ? `🏁 Готово! ${ok} нових міток вставлено. Натисніть "Зберегти"!${dupSuffix}` : `⚠️ Вставлено: ${ok}, помилок: ${fail}${dupSuffix}`,
         fail === 0 ? 'success' : 'warn'
       );
     }
     updateProgress(ok, pendingSilences.length);
 
-    // Перевірка вердикту YouTube: пересуваємо мітки з попередженням у природні паузи
-    if (!aborted && ok > 0) {
+    // Перевірка вердикту YouTube ВИМКНЕНА у спрощеному режимі (прапорець MRA_VERIFY_AFTER_INSERT)
+    if (MRA_VERIFY_AFTER_INSERT && !aborted && ok > 0) {
       try {
         await verifyAndFixFlaggedBreaks();
       } catch (e) {
@@ -1415,22 +2159,48 @@ async function insertTimecodes() {
       }
     }
 
-    // ── Telegram-звіт про проблемні мітки ──
+    // ── Telegram-звіт після вставки ──
+    // Два сценарії:
+    //   1) Технічні збої (fail/problems) → детальний 🚨-звіт kind:'insert' зі списком подій.
+    //   2) Збоїв нема, але якість плану слабка (добрих міток < 60% від цілі) →
+    //      простий звіт kind:'analysis_warn' — той самий людський формат, що після аналізу,
+    //      але вже з ФАКТИЧНИМ станом міток після вставки та перевірки YT.
     try {
       const problems = state.tgEvents.filter(ev => ev.type !== 'yt_flag_moved');
       const meta = state.analysisMeta || {};
-      const tightCut = (meta.idealAds || 0) > 0 && ((meta.realPauses || 0) / meta.idealAds) < 0.3;
-      if (fail > 0 || problems.length > 0 || tightCut) {
+      const goodShare = (meta.idealAds || 0) > 0 ? ((meta.goodCount ?? meta.realPauses ?? 0) / meta.idealAds) : 1;
+      const qualityWarn = goodShare < 0.6;
+
+      // Дедуп-карта: якщо analysis_warn для цього відео вже йшов за останні 12 год — не дублюємо
+      const videoId = getCurrentVideoKey();
+      let qualityAlreadyReported = false;
+      try {
+        const { tgAnalysisReported } = await chrome.storage.local.get('tgAnalysisReported');
+        qualityAlreadyReported = !!(tgAnalysisReported && videoId && tgAnalysisReported[videoId] && Date.now() - tgAnalysisReported[videoId] < 12 * 3600 * 1000);
+      } catch (e) { /* не критично */ }
+
+      // Позначка дедупу (спільна для обох сценаріїв — ставиться лише після успішної відправки)
+      const markReported = async () => {
+        try {
+          const fresh = ((await chrome.storage.local.get('tgAnalysisReported')).tgAnalysisReported) || {};
+          fresh[videoId] = Date.now();
+          const keys = Object.keys(fresh);
+          if (keys.length > 50) keys.sort((a, b) => fresh[a] - fresh[b]).slice(0, keys.length - 50).forEach(k => delete fresh[k]);
+          await chrome.storage.local.set({ tgAnalysisReported: fresh });
+        } catch (e) { /* не критично */ }
+      };
+
+      if (MRA_SEND_TG_REPORTS && (fail > 0 || problems.length > 0)) {
+        // ── Сценарій 1: технічні збої — детальний звіт ──
         const videoTitle = getVideoTitle();
-        const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
-        console.log('[TSN ANALYZER] 📨 Sending "insert problems" Telegram report:', { videoTitle, fail, problems: problems.length, tightCut });
+        console.log('[TSN ANALYZER] 📨 Sending "insert problems" Telegram report:', { videoTitle, fail, problems: problems.length });
         chrome.runtime.sendMessage({
           action: 'mra_tg_report',
           report: {
             kind: 'insert',
             ts: Date.now(),
             videoTitle,
-            videoId: videoIdMatch ? videoIdMatch[1] : '',
+            videoId: videoId,
             videoUrl: window.location.href,
             videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
             totalPlanned: ok + fail,
@@ -1438,10 +2208,101 @@ async function insertTimecodes() {
             events: state.tgEvents,
             analysis: state.analysisMeta || null
           }
+        }, async (res) => {
+          if (chrome.runtime.lastError) { console.warn('[TSN ANALYZER] ⚠️ Insert-звіт: помилка каналу —', chrome.runtime.lastError.message); return; }
+          if (!res || !res.ok) return;
+          if (qualityWarn) await markReported();
+        });
+      } else if (MRA_SEND_TG_REPORTS && qualityWarn && !qualityAlreadyReported && ok > 0) {
+        // ── Сценарій 2: вставка чиста, але пауз мало — простий звіт «мало пауз» ──
+        const videoTitle = getVideoTitle();
+        const ytAcceptNow = getYtAcceptQuality();
+        let marksOnVideo = 0;
+        try { marksOnVideo = getAdBreakDeleteButtons().length; } catch (e) {}
+        const naturalScores = state.selected.filter(s => !s.fallbackSpot && !s.fromYt && typeof s.quality_score === 'number').map(s => s.quality_score);
+        const qualityAvg = naturalScores.length ? Math.round(naturalScores.reduce((a, b) => a + b, 0) / naturalScores.length * 100) : null;
+        console.log('[TSN ANALYZER] 📨 Надсилаю пост-вставковий звіт «мало пауз»:', { videoTitle, goodShare, ok });
+        chrome.runtime.sendMessage({
+          action: 'mra_tg_report',
+          report: {
+            kind: 'analysis_warn',
+            ts: Date.now(),
+            videoTitle,
+            videoId: videoId,
+            videoUrl: window.location.href,
+            videoDurationSec: (state.waveformData && state.waveformData.duration) || 0,
+            analysis: meta,
+            selectedCount: state.selected.length,
+            marksOnVideo,
+            qualityAvg,
+            // Ризиковані мітки (фактичний стан після вставки): нижче межі прийняття YT,
+            // не підказка YT і не якір YT
+            marks: state.selected.filter(s => !s.ytHint && !s.fromYt && Number(s.quality_score ?? 0) < ytAcceptNow).slice(0, 25).map(s => ({
+              tc: s.timecode,
+              backup: !!s.fallbackSpot,
+              risky: true,
+              quality: s.quality_label || '',
+              score: typeof s.quality_score === 'number' ? Math.round(s.quality_score * 100) : null,
+              pauseSec: (typeof s.duration_sec === 'number' && s.duration_sec > 0) ? s.duration_sec : null
+            })),
+            totalPlanned: ok + fail, ok, fail, events: []
+          }
+        }, async (res) => {
+          if (chrome.runtime.lastError) { console.warn('[TSN ANALYZER] ⚠️ Звіт «мало пауз»: помилка каналу —', chrome.runtime.lastError.message); return; }
+          if (!res || !res.ok) return;
+          await markReported();
         });
       }
     } catch (e) {
-      console.error('[TSN ANALYZER] ❌ Error sending "insert problems" report:', e);
+      console.error('[TSN ANALYZER] ❌ Error sending post-insert report:', e);
+    }
+
+    // ── Стат-пульс: компактний АНОНІМНИЙ звіт на КОЖНУ вставку → окремий канал ──
+    // Шлеться завжди (а не лише на проблемних відео), бо саме успішні вставки —
+    // це знаменник для «який % YT приймає одразу». Жодних ідентифікаторів
+    // користувача чи відео: тільки позиції, акустичні ознаки та доля міток.
+    try {
+      const durSec = _cachedVideoDuration || (state.waveformData && state.waveformData.duration) || 0;
+      const meta = state.analysisMeta || {};
+      const events = state.tgEvents || [];
+      const removedCnt = events.filter(ev => ev.type === 'yt_flag_removed').length;
+      const survivors = state.selected || [];
+      const srcOf = (s) => s.fromYt ? 'ytAuto' : s.ytHint ? 'ytHint' : (s.fallbackSpot ? 'fallback' : 'natural');
+      const movedCnt = survivors.filter(s => s.movedByYtCheck).length;
+      // Мітки, лишені з попередженням YT, НЕ рахуємо як «прийнято одразу»
+      const flaggedKeptCnt = survivors.filter(s => s.ytFlaggedKept).length;
+      const acceptedFirstTry = survivors.filter(s => !s.movedByYtCheck && !s.ytFlaggedKept).length;
+      const num = (v) => typeof v === 'number' ? v : null;
+      // Кап на 80 міток у тілі (лічильники беруться з повного survivors, не з обрізаного)
+      const marks = survivors.slice(0, 80).map(s => ({
+        pos: durSec > 0 ? +(s.seconds / durSec).toFixed(3) : null,
+        src: srcOf(s),
+        q: num(s.quality_score),
+        avg: num(s.avg_amplitude),
+        best: num(s.best_avg_amplitude),
+        peak: num(s.max_amplitude),
+        dur: num(s.duration_sec),
+        moved: !!s.movedByYtCheck,
+        flaggedKept: !!s.ytFlaggedKept
+      }));
+      if (MRA_SEND_TG_REPORTS && MRA_SEND_STATS_PULSE) chrome.runtime.sendMessage({
+        action: 'mra_tg_stats',
+        stats: {
+          ts: Date.now(),
+          videoTitle: getVideoTitle(),
+          durSec: Math.round(durSec),
+          idealAds: meta.idealAds || null,
+          planned: ok + fail,
+          placed: survivors.length,
+          acceptedFirstTry,
+          moved: movedCnt,
+          removed: removedCnt,
+          flaggedKept: flaggedKeptCnt,
+          marks
+        }
+      }, () => { if (chrome.runtime.lastError) { /* канал недоступний — не критично */ } });
+    } catch (e) {
+      console.warn('[TSN ANALYZER] стат-пульс не надіслано:', e);
     }
 
     // Autosave: click Continue and Save

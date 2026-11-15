@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ТСН Менеджер (beta)",
-  "version": "4.1.0",
+  "version": "4.5.0",
   "description": "Автоматично ставить рекламу в паузах та запускає ефіри за вашим розкладом.",
   "icons": {
     "16": "icons/icon16.png",
@@ -14,11 +14,14 @@
     "tabs",
     "windows",
     "notifications",
-    "scripting"
+    "scripting",
+    "identity",
+    "identity.email"
   ],
   "host_permissions": [
     "https://studio.youtube.com/*",
-    "https://api.telegram.org/*"
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -29,11 +32,22 @@
         "https://studio.youtube.com/*"
       ],
       "js": [
+        "inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://studio.youtube.com/*"
+      ],
+      "js": [
         "src/config.js",
         "src/utils.js",
         "src/analyzer.js",
         "src/render.js",
         "src/injector.js",
+        "src/valera_cloud.js",
         "src/ui.js",
         "src/init.js",
         "src/scheduler.js"
@@ -44,7 +58,9 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "inject.js"
+        "inject.js",
+        "media/figure_dark.mp4",
+        "media/figure_atlas.webp"
       ],
       "matches": [
         "https://studio.youtube.com/*"

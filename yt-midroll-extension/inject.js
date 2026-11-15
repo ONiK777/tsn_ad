@@ -1,9 +1,13 @@
 (function () {
+    if (window.__mraInjectInstalled) return;
+    window.__mraInjectInstalled = true;
+
     // ── Пошук підказок YouTube про природні паузи у JSON-відповідях Studio ──
     // YT сам знає, де у відео природні паузи (його вердикт "перемістіть мітку"
     // береться саме звідси). Якщо ці позиції приходять по мережі — віддаємо їх боту.
     const AD_HINT_URL_RE = /ad_?break|monetiz|video_editor|get_video|editor/i;
-    const AD_HINT_KEY_RE = /ad.?break|natural.?pause|suggest|break.?point/i;
+    const AD_HINT_KEY_RE = /(natural.?pause|suggest.*ad.?break|ad.?break.?suggest|suggested.?break|break.?point)/i;
+    const AD_HINT_EXCLUDE_RE = /(manual|existing|current|user|deleted|removed)/i;
 
     function pickTimeField(o) {
         if (!o || typeof o !== 'object') return null;
@@ -14,34 +18,43 @@
     }
 
     function scanForAdBreakHints(data, url) {
-        let found = null;
+        const matches = [];
         const visit = (node, keyPath, depth) => {
-            if (!node || typeof node !== 'object' || found || depth > 12) return;
+            if (!node || typeof node !== 'object' || depth > 12) return;
+            if (AD_HINT_EXCLUDE_RE.test(keyPath)) return;
             if (Array.isArray(node)) {
                 if (node.length >= 3 && node.length <= 500 && AD_HINT_KEY_RE.test(keyPath)) {
+                    let times = null;
                     if (node.every(v => typeof v === 'number' && isFinite(v) && v >= 0)) {
-                        found = node.slice(0, 500);
-                        return;
+                        times = node.slice(0, 500);
+                    } else {
+                        const parsed = node.map(pickTimeField);
+                        if (parsed.length && parsed.every(t => t !== null)) {
+                            times = parsed.slice(0, 500);
+                        }
                     }
-                    const times = node.map(pickTimeField);
-                    if (times.length && times.every(t => t !== null)) {
-                        found = times.slice(0, 500);
-                        return;
+                    if (times && times.length >= 3) {
+                        const priority = /natural|suggest/i.test(keyPath) ? 2 : 1;
+                        matches.push({ times, priority });
                     }
                 }
                 for (const ch of node) visit(ch, keyPath, depth + 1);
                 return;
             }
-            for (const k in node) visit(node[k], keyPath + '.' + k, depth + 1);
+            for (const k in node) visit(node[k], keyPath ? (keyPath + '.' + k) : k, depth + 1);
         };
         try { visit(data, '', 0); } catch (e) { }
 
-        if (found && found.length >= 3) {
-            window.postMessage({
-                type: 'MRA_YT_AD_HINTS',
-                url: String(url).slice(0, 160),
-                times: found
-            }, '*');
+        if (matches.length > 0) {
+            matches.sort((a, b) => b.priority - a.priority || b.times.length - a.times.length);
+            const best = matches[0].times;
+            if (best && best.length >= 3) {
+                window.postMessage({
+                    type: 'MRA_YT_AD_HINTS',
+                    url: String(url).slice(0, 160),
+                    times: best
+                }, '*');
+            }
         }
     }
 

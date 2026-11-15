@@ -5,27 +5,31 @@
 
 const ALARM_NAME = 'mra_stream_launch';
 
-// ── Ініціалізація при встановленні або оновленні ──
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['tgSettings', 'tgEnabledMigrated'], (data) => {
-    if (!data.tgSettings) {
-      chrome.storage.local.set({
-        tgSettings: { enabled: true, token: '', chatId: '' },
-        tgEnabledMigrated: true
-      });
-      console.log('[TSN MANAGER BG] ✅ Initialized tgSettings with enabled=true');
-    } else if (data.tgSettings.enabled === false && !data.tgEnabledMigrated) {
-      // Старий баг: enabled=false записувався мовчки за замовчуванням. Одноразово вмикаємо.
-      chrome.storage.local.set({
-        tgSettings: { ...data.tgSettings, enabled: true },
-        tgEnabledMigrated: true
-      });
-      console.log('[TSN MANAGER BG] ✅ Migrated tgSettings.enabled false→true (one-time)');
-    } else if (!data.tgEnabledMigrated) {
-      chrome.storage.local.set({ tgEnabledMigrated: true });
-    }
-  });
-});
+// ── Telegram: звіти йдуть через власний проксі (Apps Script), токен живе ТІЛЬКИ там ──
+// Токен і chat_id вписані в самому проксі (proxy/Code.gs), у клієнті — лише адреса.
+// Куди слати (alerts/stats) вирішує сам проксі. Деплой: proxy/README.md.
+// Порожній URL = звіти вимкнені.
+const TG_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzLB4wBoN0SbqBrFRoII0vjhY-o-ptlOyEG8HEgBCUWJdk7QXgPm7vLZhgpIS8phU0/exec';
+
+// ── Keepalive для MV3 service worker ──
+// Chrome вбиває service worker після ~30с без викликів розширення-API, а «План дій»
+// в onAlarm чекає до 90с на кожному кроці без жодного виклику API — SW засинає
+// посеред багатокрокового плану. Будь-який виклик chrome.* API скидає idle-таймер,
+// тому періодично дьоргаємо нешкідливий getPlatformInfo.
+let _kaTimer = null;
+let _kaStopTimer = null;
+
+function startKeepAlive(maxMs) {
+  stopKeepAlive();
+  _kaTimer = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
+  // Страховка: якщо десь забудемо зупинити — keepalive сам згасне, а не житиме вічно.
+  _kaStopTimer = setTimeout(stopKeepAlive, maxMs);
+}
+
+function stopKeepAlive() {
+  if (_kaTimer) { clearInterval(_kaTimer); _kaTimer = null; }
+  if (_kaStopTimer) { clearTimeout(_kaStopTimer); _kaStopTimer = null; }
+}
 
 // ── Сповіщення з перевіркою налаштувань ──
 // Категорії: 'notif-stream-live', 'notif-stream-ended', 'notif-command-sent',
@@ -86,10 +90,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const data = await chrome.storage.local.get(['scheduledTime', 'scheduleEnabled', 'actionType', 'endBeforeLaunch']);
   if (!data.scheduleEnabled) return;
 
+  // 15 хв з запасом покриває найдовший багатокроковий план (кілька кроків по 90с +
+  // кулдауни) і роботу sendLaunchWithRetry, яка виконується вже ПІСЛЯ виходу з цього
+  // обробника. Явних stopKeepAlive у гілках нижче свідомо немає: частина роботи
+  // (sendLaunchWithRetry) живе поза async-функцією onAlarm, тож зупинка «наприкінці
+  // обробника» обірвала б її передчасно — авто-стоп за таймером дешевший і безпечніший.
+  startKeepAlive(15 * 60 * 1000);
+
   console.log('[TSN MANAGER BG] ⏰ Launch Alarm fired at', new Date().toLocaleTimeString());
 
   // Ставимо прапор — якщо content script перезавантажиться, він підхопить
-  await chrome.storage.local.set({ pendingLaunch: true });
+  await chrome.storage.local.set({ pendingLaunch: true, pendingLaunchTs: Date.now() });
 
   // Знаходимо всі відкриті вкладки YouTube Studio
   const allStudioTabs = await chrome.tabs.query({ url: 'https://studio.youtube.com/*' });
@@ -201,10 +212,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           await chrome.windows.update(liveTabs[i].tab.windowId, { focused: true });
           await new Promise(r => setTimeout(r, 1000));
 
+          const expectTabId = liveTabs[i].tab.id;
           const endVerifiedPromise = new Promise((resolve) => {
             // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
             const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
-            const listener = (req) => {
+            // Без фільтра відправника підтвердження з ЧУЖОЇ вкладки хибно закривало б цей крок.
+            const listener = (req, sender) => {
+              if (!sender.tab || sender.tab.id !== expectTabId) return;
               if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
             };
             chrome.runtime.onMessage.addListener(listener);
@@ -249,9 +263,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           await chrome.windows.update(notLiveTabs[i].tab.windowId, { focused: true });
           await new Promise(r => setTimeout(r, 1000));
 
+          const expectTabId = notLiveTabs[i].tab.id;
           const liveVerifiedPromise = new Promise((resolve) => {
             const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve('mra_live_check_failed'); }, 90000);
-            const listener = (req) => {
+            const listener = (req, sender) => {
+              if (!sender.tab || sender.tab.id !== expectTabId) return;
               if (req.action === 'mra_live_verified' || req.action === 'mra_live_check_failed') {
                 clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(req.action);
               }
@@ -305,9 +321,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             await chrome.windows.update(newTab.tab.windowId, { focused: true });
             await new Promise(r => setTimeout(r, 1000));
 
+            const expectTabId = newTab.tab.id;
             const liveVerifiedPromise = new Promise((resolve) => {
               const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve('mra_live_check_failed'); }, 90000);
-              const listener = (req) => {
+              const listener = (req, sender) => {
+                if (!sender.tab || sender.tab.id !== expectTabId) return;
                 if (req.action === 'mra_live_verified' || req.action === 'mra_live_check_failed') {
                   clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(req.action);
                 }
@@ -344,10 +362,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             await chrome.windows.update(oldTab.tab.windowId, { focused: true });
             await new Promise(r => setTimeout(r, 1000));
 
+            const expectTabId = oldTab.tab.id;
             const endVerifiedPromise = new Promise((resolve) => {
               // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
               const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
-              const listener = (req) => {
+              const listener = (req, sender) => {
+                if (!sender.tab || sender.tab.id !== expectTabId) return;
                 if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
               };
               chrome.runtime.onMessage.addListener(listener);
@@ -435,10 +455,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await chrome.windows.update(liveTabs[i].tab.windowId, { focused: true });
         await new Promise(r => setTimeout(r, 1000));
 
+        const expectTabId = liveTabs[i].tab.id;
         const endPromise = new Promise((resolve) => {
           // 40с: повний цикл end у content script (пошук кнопки до 22.5с + клік + діалог + верифікація) може тривати до ~36с
           const timeout = setTimeout(() => { chrome.runtime.onMessage.removeListener(listener); resolve(false); }, 40000);
-          const listener = (req) => {
+          const listener = (req, sender) => {
+            if (!sender.tab || sender.tab.id !== expectTabId) return;
             if (req.action === 'mra_stream_ended') { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(listener); resolve(true); }
           };
           chrome.runtime.onMessage.addListener(listener);
@@ -510,12 +532,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await chrome.windows.update(tab.windowId, { focused: true });
       await new Promise(r => setTimeout(r, 1000));
 
+      const expectTabId = tab.id;
       const verifyPromise = new Promise((resolve) => {
         const timeout = setTimeout(() => {
           chrome.runtime.onMessage.removeListener(listener);
           resolve('mra_live_check_failed');
         }, 90000);
-        const listener = (req) => {
+        const listener = (req, sender) => {
+          if (!sender.tab || sender.tab.id !== expectTabId) return;
           if (req.action === 'mra_live_verified' || req.action === 'mra_live_check_failed') {
             clearTimeout(timeout);
             chrome.runtime.onMessage.removeListener(listener);
@@ -737,6 +761,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   function sendLaunchWithRetry(attemptsLeft, delayMs) {
     if (attemptsLeft <= 0) {
       console.warn('[TSN MANAGER BG] All retry attempts exhausted, content script did not respond.');
+      // Доставка остаточно провалилась — знімаємо прапор, інакше він завис би
+      // назавжди і несподівано запустив би пошук Go Live при наступному відкритті Studio.
+      chrome.storage.local.set({ pendingLaunch: false });
       notify('mra_done_notify', {
         type: 'basic',
         iconUrl: chrome.runtime.getURL('icons/icon128.png'),
@@ -814,116 +841,233 @@ function fmtTc(sec) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
-async function tgApi(token, method, payload) {
-  const url = `https://api.telegram.org/bot${token}/${method}`;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    return await res.json();
-  } catch (e) {
-    // Не логуємо токен
-    throw new Error('Telegram API fetch error: ' + e.message);
-  }
+async function tgProxySend(kind, text) {
+  // text/plain замість application/json — Apps Script не відповідає на CORS preflight,
+  // а вміст він однаково читає з e.postData.contents
+  const res = await fetch(TG_PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ kind, text })
+  });
+  return await res.json(); // { ok: boolean, error: string }
 }
 
-function buildTgReport(report) {
+// ── Робоча пошта оператора (Google-акаунт, під яким увійшли в Chrome) ──
+// Для підпису «Звіт надіслав» у buildTgReport — щоб у чаті було видно, хто саме
+// надіслав звіт, без ручного вводу.
+function getOperatorEmail() {
+  return new Promise((resolve) => {
+    try {
+      chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (info) => {
+        resolve((info && info.email) || '');
+      });
+    } catch (e) { resolve(''); }
+  });
+}
+
+// Анонімний стат-пульс: короткий людський заголовок + машинний JSON у <pre>,
+// щоб при експорті каналу скрипт легко витяг об'єкт із кожного повідомлення.
+// Жодних ідентифікаторів користувача/відео — лише цифри по мітках.
+function buildStatsReport(stats) {
+  const s = stats || {};
+  const placed = s.placed || 0;
+  const acc = placed > 0 ? Math.round((s.acceptedFirstTry / placed) * 100) : 0;
+  const titleLine = s.videoTitle ? `📹 <b>${tgEscape(s.videoTitle)}</b>\n` : '';
+  const head = `📊 <b>stats</b> · міток ${placed}/${s.planned || 0}`
+    + ` · YT прийняв одразу ${acc}%`
+    + ` · пересунуто ${s.moved || 0} · лишено з попередж. ${s.flaggedKept || 0} · видалено ${s.removed || 0}`;
+  // Ліміт Telegram — 4096 символів: JSON із ~80 мітками може не влізти.
+  // Зрізаємо масив marks удвічі, доки повідомлення не влізе; лічильники в
+  // заголовку рахуються з повного набору і від зрізання не страждають.
+  let marks = Array.isArray(s.marks) ? s.marks : [];
+  let text;
+  for (;;) {
+    const json = tgEscape(JSON.stringify({ ...s, marks }));
+    text = `${titleLine}${head}\n<pre>${json}</pre>`;
+    if (text.length <= 4000 || !marks.length) break;
+    marks = marks.slice(0, Math.floor(marks.length / 2));
+  }
+  return text;
+}
+
+// Малювання кольорової шкали успішності (6-8 блоків)
+function renderHealthBar(good, risky, total) {
+  const tot = total > 0 ? total : ((good + risky) || 1);
+  const len = Math.min(Math.max(tot, 6), 8);
+  const goodBlocks = Math.round((good / tot) * len);
+  const ratio = good / tot;
+  const riskyEmoji = ratio < 0.35 ? '🟥' : '🟨';
+  let bar = '🟩'.repeat(Math.max(0, goodBlocks)) + riskyEmoji.repeat(Math.max(0, len - goodBlocks));
+  if (!bar) bar = '🟥'.repeat(len);
+  return bar;
+}
+
+function buildTgReport(report, senderEmail) {
   const { videoTitle, videoId, videoDurationSec, totalPlanned, ok, fail, events } = report;
 
   const durStr = videoDurationSec > 0 ? fmtDur(videoDurationSec) : 'невідомо';
   const studioUrl = videoId ? `https://studio.youtube.com/video/${videoId}/edit` : '';
 
+  // Підпис відправника (робоча пошта) — щоб у чаті було видно, від кого звіт.
+  // Дописуємо ПІСЛЯ обрізки тіла, щоб підпис не загубився на ліміті Telegram (4096).
+  function finalize(lines) {
+    const sig = senderEmail ? `\n\n👤 <b>Звіт надіслав:</b> ${tgEscape(senderEmail)}` : '';
+    let text = lines.join('\n');
+    const maxBody = 4000 - sig.length;
+    if (text.length > maxBody) text = text.substring(0, maxBody - 1) + '…';
+    return text + sig;
+  }
+
   // ── КРИТИЧНИЙ КЕЙС: «встик» — жодного місця для реклами ──
   if (report.kind === 'no_spots') {
     const an = report.analysis || {};
     let lines = [];
-    lines.push(`🔴 <b>ТСН Менеджер — КРИТИЧНО: МІТКИ НЕ ПОСТАВЛЕНО</b>`);
+    lines.push(`🚨 <b>ТСН • КРИТИЧНО: ВІДЕО ВСТИК</b>`);
+    lines.push(`🟥🟥🟥🟥🟥🟥 <b>0%</b> придатних місць для реклами`);
     lines.push('');
-    lines.push(`📹 Відео: «${tgEscape(videoTitle)}»`);
-    lines.push(`⏱ Хронометраж: ${durStr}`);
-    if (studioUrl) lines.push(`🔗 <a href="${studioUrl}">Відкрити редактор</a>`);
+    lines.push(`📹 <b>«${tgEscape(videoTitle)}»</b>`);
+    lines.push(`⏱ ${durStr}  •  🎯 Потрібно: ~${an.idealAds || 'кілька'} реклам`);
     lines.push('');
-    lines.push(`🎬 <b>Відео змонтоване ВСТИК</b> — бот не знайшов жодного придатного місця для реклами.`);
+    lines.push(`<blockquote>🎬 <b>Відео змонтоване ВСТИК:</b> бот не знайшов жодного місця для реклами. У цьому відео РЕКЛАМИ НЕ БУДЕ, доки мітки не поставлять вручну.</blockquote>`);
     if (an.idealAds) {
       const escalatedNote = an.escalated
         ? ` навіть з максимальною чутливістю (поріг ${an.finalThr}%, мін. тиша ${an.finalMinS}с)`
         : '';
-      lines.push(`За хронометражем тут мало бути ${an.idealAds} міток. Бот шукав паузи${escalatedNote} — сирих тихих ділянок знайдено: ${an.pausesFound}, придатних: 0.`);
+      lines.push('');
+      lines.push(`<i>За хронометражем мало бути ~${an.idealAds} міток. Шукали паузи${escalatedNote} — знайдено 0 придатних.</i>`);
     }
-    lines.push('');
-    lines.push(`⚠️ <b>Наслідок:</b> у цьому відео РЕКЛАМИ НЕ БУДЕ, доки мітки не поставлять вручну.`);
     lines.push('');
     lines.push(`👉 <b>Що робити:</b>`);
     lines.push(`1. Відкрити редактор за посиланням і спробувати поставити мітки вручну.`);
     lines.push(`2. Якщо пауз справді нема — повернути відео монтажерам, щоб додали природні паузи (~кожні 2 хвилини).`);
-    const text = lines.join('\n');
-    if (text.length > 4000) return text.substring(0, 3997) + '…';
-    return text;
+    if (studioUrl) {
+      lines.push('');
+      lines.push(`🔗 <b><a href="${studioUrl}">👉 Відкрити редактор у YouTube Studio</a></b>`);
+    }
+    return finalize(lines);
   }
 
-  // ── ПОПЕРЕДЖЕННЯ: складний монтаж / міток менше за ідеал (звіт одразу після аналізу) ──
+  // ── ПОПЕРЕДЖЕННЯ / ЗВІТ ПРО МОНЕТИЗАЦІЮ (одразу після аналізу) ──
   if (report.kind === 'analysis_warn') {
     const an = report.analysis || {};
     const selectedCount = report.selectedCount || 0;
-    const idealStr = an.idealAds ? `~${an.idealAds}` : 'кілька';
-    const bc = an.backupCount || 0;
-    const rp = an.realPauses || 0;
+    const idealAds = an.idealAds || selectedCount || 0;
+    const idealStr = idealAds ? `~${idealAds}` : 'кілька';
+
+    // Підтримка нових полів (riskyCount/goodCount) з graceful fallback на старі (backupCount/realPauses)
+    const riskyCount = (an.riskyCount !== undefined) ? an.riskyCount : (an.backupCount || 0);
+    const goodCount  = (an.goodCount  !== undefined) ? an.goodCount  : (an.realPauses || 0);
+    const missingCount = Math.max(0, idealAds - selectedCount);
+
+    // Список усіх відібраних міток та ризикованих
+    const allMarks = Array.isArray(report.marks) ? report.marks : [];
+    const riskyMarks = allMarks.filter(m => m.risky !== undefined ? m.risky : m.backup);
+
+    const totalBase = idealAds > 0 ? idealAds : (selectedCount > 0 ? selectedCount : 1);
+    const goodShare = totalBase > 0 ? (goodCount / totalBase) : 0;
+    const effPct = Math.round(goodShare * 100);
+    const bar = renderHealthBar(goodCount, riskyCount, totalBase);
+
+    // Статусний рядок біля шкали
+    const barParts = [`<b>${goodCount} надійні</b>`];
+    if (riskyCount > 0) barParts.push(`<b>${riskyCount} під питанням</b>`);
+    if (missingCount > 0) barParts.push(`<b>${missingCount} не вистачило</b>`);
 
     let lines = [];
-    lines.push(`🟠 <b>У цьому відео мало пауз — частина реклами може не показатись</b>`);
+
+    // 1. Заголовок і прогрес-бар
+    if (goodShare >= 0.8) {
+      lines.push(`🟢 <b>ТСН • ІДЕАЛЬНА МОНЕТИЗАЦІЯ (~${effPct}%)</b>`);
+      lines.push(`${bar} <b>${goodCount} надійних</b>  •  <b>0 під питанням</b>`);
+    } else if (goodShare >= 0.4 && goodCount >= 2) {
+      lines.push(`🟡 <b>ТСН • ПОТРЕБУЄ УВАГИ (~${effPct}%)</b>`);
+      lines.push(`${bar} ${barParts.join('  •  ')}`);
+    } else {
+      lines.push(`🚨 <b>ТСН • КРИТИЧНИЙ РИЗИК МОНЕТИЗАЦІЇ (~${effPct}%)</b>`);
+      lines.push(`${bar} <b>Лише ${goodCount} з ${selectedCount || idealAds}</b> у чистій паузі!`);
+    }
     lines.push('');
-    lines.push(`📹 «${tgEscape(videoTitle)}»`);
+
+    // 2. Метадані відео
+    lines.push(`📹 <b>«${tgEscape(videoTitle)}»</b>`);
     lines.push(`⏱ ${durStr}`);
-    if (studioUrl) {
-      lines.push(`🔗 <b><a href="${studioUrl}">Відкрити редактор у YouTube Studio</a></b>`);
+    lines.push('');
+
+    // 3. Акцентний блок-цитата (головний вердикт)
+    if (goodShare >= 0.8) {
+      lines.push(`<blockquote>✅ <b>Усі ${goodCount} реклам стали в чисті паузи:</b> YouTube гарантовано покаже всі точки.</blockquote>`);
+    } else if (goodShare < 0.4) {
+      lines.push(`<blockquote>❌ <b>Відео змонтоване майже без пауз:</b> YouTube з високою ймовірністю проігнорує більшість реклами.</blockquote>`);
+    } else if (riskyCount > 0 && missingCount > 0) {
+      lines.push(`<blockquote>⚠️ <b>У відео замало тиші:</b> бот поставив лише ${selectedCount} з ${idealAds} реклам, до того ж ${riskyCount} з них у слабших місцях.</blockquote>`);
+    } else if (riskyCount > 0) {
+      lines.push(`<blockquote>⚠️ <b>У відео замало тиші:</b> ${riskyCount} реклам стоять у слабших місцях і можуть не показатись.</blockquote>`);
+    } else if (missingCount > 0) {
+      lines.push(`<blockquote>⚠️ <b>У відео мало пауз:</b> бот зміг знайти лише ${selectedCount} місць з ${idealAds} рекомендованих.</blockquote>`);
+    } else {
+      lines.push(`<blockquote>⚠️ <b>У відео замало тиші:</b> частина реклами може не показатися.</blockquote>`);
     }
     lines.push('');
 
-    lines.push(`📊 <b>Коротко:</b>`);
-    lines.push(`• YouTube радить на таке відео: <b>${idealStr}</b> реклам`);
-    lines.push(`• Бот поставив: <b>${selectedCount}</b>`);
-    lines.push(`    🟢 <b>${rp}</b> — у справжніх паузах, реклама покажеться майже напевно (~95%)`);
-    if (bc > 0) {
-      lines.push(`    🔺 <b>${bc}</b> — у «так собі» місцях, бо пауз не вистачило`);
-    }
-    if (typeof report.marksOnVideo === 'number' && report.marksOnVideo > 0) {
-      lines.push(`• На відео вже стояли мітки (<b>${report.marksOnVideo}</b> шт.) — бот їх не чіпав`);
-    }
-
-    // Показуємо ЛИШЕ запасні мітки — природні видно в рахунку, перевіряти їх не треба
-    const backupMarks = (Array.isArray(report.marks) ? report.marks : []).filter(m => m.backup);
-    if (backupMarks.length) {
-      lines.push('');
-      lines.push(`🔺 <b>Ось ці місця. Якщо є хвилинка — переслухайте їх у редакторі:</b>`);
-      lines.push('');
-      backupMarks.forEach((m, i) => {
-        // Шанс — індивідуальний для кожного місця: береться з реального виміру,
-        // наскільки воно тихіше за середню гучність відео (клампимо в 20..90%)
-        let chance = 'шанс показу невідомий';
-        if (m.score != null) {
-          const pct = Math.min(90, Math.max(20, Math.round(m.score)));
-          const word = pct >= 70 ? 'скоріш за все буде' : (pct >= 45 ? 'може бути, а може ні' : 'скоріш за все не буде');
-          chance = `шанс реклами: ~<b>${pct}%</b> (${word})`;
-        }
-        lines.push(`<b>${i + 1}.</b> ${tgEscape(m.tc)} — ${chance}`);
-      });
-      if (bc > backupMarks.length) {
-        lines.push(`<i>…і ще ${bc - backupMarks.length} таких місць</i>`);
+    // 4. Розкладка монетизації
+    lines.push(`📊 <b>Розкладка монетизації:</b>`);
+    lines.push(`• YouTube радить: <b>${idealStr}</b> реклам`);
+    if (goodShare >= 0.8) {
+      lines.push(`• Бот поставив: <b>${selectedCount}</b> (🟢 <b>${goodCount}</b> пройшли межу прийняття)`);
+    } else {
+      lines.push(`• Бот поставив: <b>${selectedCount}</b>`);
+      lines.push(`    🟢 <b>${goodCount}</b> — пройшли межу прийняття (покажуться напевно)`);
+      if (riskyCount > 0) {
+        const note = goodShare < 0.4 ? 'критично слабкі точки' : 'YouTube може пропустити';
+        lines.push(`    🔺 <b>${riskyCount}</b> — нижче межі прийняття (${note})`);
+      }
+      if (missingCount > 0) {
+        lines.push(`    ⭕️ <b>${missingCount}</b> — не знайдено через щільну мову`);
       }
     }
-
-    lines.push('');
-    if (bc > 0) {
-      lines.push(`💡 <b>Простими словами:</b> реклама найкраще спрацьовує в тиші між реченнями. У цьому відео такої тиші мало, тож частину реклам бот поставив просто в найтихіші місця. YouTube такі місця інколи пропускає — реклами там не буде, і відео заробить менше, ніж могло б.`);
-    } else {
-      lines.push(`💡 <b>Простими словами:</b> у відео мало тиші між реченнями, тому реклам вийшло менше, ніж радить YouTube (${selectedCount} замість ${idealStr}). Менше реклами — менший заробіток.`);
+    if (typeof report.marksOnVideo === 'number' && report.marksOnVideo > 0 && report.marksOnVideo !== selectedCount) {
+      lines.push(`• Зараз на відео міток: <b>${report.marksOnVideo}</b>`);
     }
 
-    const text = lines.join('\n');
-    if (text.length > 4000) return text.substring(0, 3997) + '…';
-    return text;
+    // 5. Таймкоди
+    if (riskyMarks.length) {
+      lines.push('');
+      const listHeader = goodShare < 0.4 ? '📍 <b>Слабкі місця:</b>' : '📍 <b>Сумнівні місця:</b>';
+      lines.push(listHeader);
+      riskyMarks.forEach((m, i) => {
+        let chance = 'шанс невідомий';
+        let icon = '🟡';
+        if (m.score != null) {
+          const pct = Math.min(90, Math.max(15, Math.round(m.score)));
+          icon = pct >= 65 ? '🟡' : (pct >= 40 ? '🔴' : '❌');
+          chance = `~<b>${pct}%</b> шанс`;
+        }
+        lines.push(`<b>${i + 1}.</b> <code>${tgEscape(m.tc)}</code> — ${icon} ${chance}`);
+      });
+      if (riskyCount > riskyMarks.length) {
+        lines.push(`<i>…і ще ${riskyCount - riskyMarks.length} таких місць</i>`);
+      }
+    } else if (allMarks.length > 0 && selectedCount <= 8) {
+      lines.push('');
+      lines.push(`📍 <b>Поставлені точки:</b>`);
+      allMarks.forEach((m, i) => {
+        let chance = 'чиста пауза';
+        if (m.score != null) {
+          const pct = Math.min(95, Math.max(20, Math.round(m.score)));
+          const extra = m.pauseSec ? `, пауза ${m.pauseSec.toFixed(1)}с` : '';
+          chance = `~<b>${pct}%</b>${extra}`;
+        }
+        lines.push(`<b>${i + 1}.</b> <code>${tgEscape(m.tc)}</code> — 🟢 ${chance}`);
+      });
+    }
+
+    // 6. Посилання на редактор
+    if (studioUrl) {
+      lines.push('');
+      lines.push(`🔗 <b><a href="${studioUrl}">👉 Відкрити редактор у YouTube Studio</a></b>`);
+    }
+
+    return finalize(lines);
   }
 
   // ── Звичайний звіт про вставку ──
@@ -941,34 +1085,44 @@ function buildTgReport(report) {
   lines.push('');
   lines.push(`📊 <b>Підсумок:</b> мали вставити ${totalPlanned} міток, успішно ${ok}, з проблемами ${problemCount}`);
 
-  // Попередження про монтаж встик (якщо менше 30% природних пауз)
+  // Додаткове попередження, якщо у відео мало чистих пауз (добрих міток < 60% від цілі)
   const an = report.analysis || {};
-  if (an.idealAds > 0 && (an.realPauses || 0) / an.idealAds < 0.3) {
-    const zeroNote = (an.realPauses || 0) === 0 ? ' (ЖОДНОЇ)' : '';
+  const insGood = (an.goodCount !== undefined) ? an.goodCount : (an.realPauses || 0);
+  const insRisky = (an.riskyCount !== undefined) ? an.riskyCount : (an.backupCount || 0);
+  if (an.idealAds > 0 && insGood / an.idealAds < 0.6) {
     lines.push('');
-    lines.push(`🎬 <b>Увага — монтаж встик:</b> з потрібних ${an.idealAds} міток природних пауз лише ${an.realPauses || 0}${zeroNote}. Решта (${an.backupCount || 0}) поставлені у «найтихіших місцях» — YouTube може рідше показувати там рекламу або бракувати ці мітки.`);
+    lines.push(`🟠 <b>До того ж у цьому відео мало пауз:</b> YouTube радить ~${an.idealAds} реклам, надійних місць лише ${insGood}${insRisky > 0 ? `, ще ${insRisky} — нижче межі прийняття YouTube (реклама там може не показатись)` : ''}.`);
   }
-
-  lines.push('');
-  lines.push(`<i>Що пішло не так:</i>`);
 
   // Всі події: спочатку проблемні, потім переміщені (довідково)
   const allEvents = [...allProblems, ...movedOk];
   const showEvents = allEvents.slice(0, 15);
   const hiddenCount = allEvents.length - showEvents.length;
 
+  // Секцію «Що пішло не так» показуємо ЛИШЕ якщо є конкретні події для відображення
+  if (showEvents.length > 0) {
+  lines.push('');
+  lines.push(`<i>Що пішло не так:</i>`);
+  }
+
   showEvents.forEach((ev, i) => {
     const num = i + 1;
+    const planTcCode = ev.plannedTc ? `<code>${tgEscape(ev.plannedTc)}</code>` : '';
+    const actTcCode = ev.actualTc ? `<code>${tgEscape(ev.actualTc)}</code>` : '';
+    const atTcCode = ev.atTc ? `<code>${tgEscape(ev.atTc)}</code>` : '';
+    const fromTcCode = ev.fromTc ? `<code>${tgEscape(ev.fromTc)}</code>` : '';
+    const toTcCode = ev.toTc ? `<code>${tgEscape(ev.toTc)}</code>` : '';
+
     if (ev.type === 'insert_failed') {
-      lines.push(`${num}. ❌ ${tgEscape(ev.plannedTc)} — мітку НЕ ВСТАВЛЕНО (технічний збій). Як мало бути: рекламна пауза на ${tgEscape(ev.plannedTc)}${ev.quality ? ` (якість паузи: ${tgEscape(ev.quality)})` : ''}. Цю мітку треба поставити вручну.${ev.error ? ` <i>Причина для розробника: ${tgEscape(String(ev.error).substring(0, 120))}</i>` : ''}`);
+      lines.push(`${num}. ❌ ${planTcCode} — мітку НЕ ВСТАВЛЕНО (технічний збій). Як мало бути: рекламна пауза на ${planTcCode}${ev.quality ? ` (якість паузи: ${tgEscape(ev.quality)})` : ''}. Цю мітку треба поставити вручну.${ev.error ? ` <i>Причина для розробника: ${tgEscape(String(ev.error).substring(0, 120))}</i>` : ''}`);
     } else if (ev.type === 'time_mismatch') {
-      lines.push(`${num}. ⚠️ ${tgEscape(ev.plannedTc)} — мітка стала на НЕПРАВИЛЬНИЙ час ${tgEscape(ev.actualTc)}. Як мало бути: ${tgEscape(ev.plannedTc)}. Перевірте і пересуньте вручну.`);
+      lines.push(`${num}. ⚠️ ${planTcCode} — мітка стала на НЕПРАВИЛЬНИЙ час ${actTcCode}. Як мало бути: ${planTcCode}. Перевірте і пересуньте вручну.`);
     } else if (ev.type === 'yt_flag_stuck') {
-      lines.push(`${num}. 🟡 ${tgEscape(ev.atTc)} — YouTube попереджає, що реклама в цьому місці може НЕ ПОКАЗУВАТИСЬ (немає природної паузи поруч). Бот 3 рази спробував пересунути — не вийшло. Перегляньте це місце.`);
+      lines.push(`${num}. 🟡 ${atTcCode} — YouTube попереджає, що реклама в цьому місці може НЕ ПОКАЗУВАТИСЬ (немає природної паузи поруч). Бот 3 рази спробував пересунути — не вийшло. Перегляньте це місце.`);
     } else if (ev.type === 'yt_flag_removed') {
-      lines.push(`${num}. 🗑 ${tgEscape(ev.atTc)} — YouTube не прийняв це місце, мітку ВИДАЛЕНО. В цій частині відео реклами не буде, якщо не поставити вручну.`);
+      lines.push(`${num}. 🗑 ${atTcCode} — YouTube не прийняв це місце, мітку ВИДАЛЕНО. В цій частині відео реклами не буде, якщо не поставити вручну.`);
     } else if (ev.type === 'yt_flag_moved') {
-      lines.push(`${num}. ✅ ${tgEscape(ev.fromTc)} → ${tgEscape(ev.toTc)} — YouTube забракував місце, але бот сам пересунув мітку на сусідню паузу. Виправлено автоматично.`);
+      lines.push(`${num}. ✅ ${fromTcCode} → ${toTcCode} — YouTube забракував місце, але бот сам пересунув мітку на сусідню паузу. Виправлено автоматично.`);
     }
   });
 
@@ -979,10 +1133,7 @@ function buildTgReport(report) {
   lines.push('');
   lines.push(`👉 <b>Що робити:</b> відкрити редактор за посиланням вище і перевірити мітки зі значками ❌/⚠️/🟡/🗑.`);
 
-  const text = lines.join('\n');
-  // Telegram ліміт 4096 символів
-  if (text.length > 4000) return text.substring(0, 3997) + '…';
-  return text;
+  return finalize(lines);
 }
 
 async function pushTgHistory(entry) {
@@ -1087,9 +1238,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // ── Telegram: надіслати звіт про проблемні мітки ──
   if (request.action === 'mra_tg_report') {
+    // Проксі не налаштовано (див. коментар вище) — Telegram-звіти й так вимкнені
+    // прапорцем MRA_SEND_TG_REPORTS, тож просто чесно відповідаємо і нічого не робимо.
+    if (!TG_PROXY_URL) { sendResponse({ ok: false, error: 'tg-disabled' }); return; }
     (async () => {
-      const { tgSettings } = await chrome.storage.local.get('tgSettings');
-      const s = tgSettings || {};
       const entry = {
         ts: request.report.ts,
         videoTitle: request.report.videoTitle,
@@ -1100,7 +1252,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         problems: request.report.kind === 'no_spots'
           ? ((request.report.analysis && request.report.analysis.idealAds) || 1)
           : request.report.kind === 'analysis_warn'
-            ? ((request.report.analysis && request.report.analysis.backupCount) || 0) + Math.max(0, ((request.report.analysis && request.report.analysis.idealAds) || 0) - (request.report.selectedCount || 0))
+            ? (((request.report.analysis && (request.report.analysis.riskyCount !== undefined ? request.report.analysis.riskyCount : request.report.analysis.backupCount)) || 0)) + Math.max(0, ((request.report.analysis && request.report.analysis.idealAds) || 0) - (request.report.selectedCount || 0))
             : (request.report.events || []).filter(ev => ev.type !== 'yt_flag_moved').length,
         sent: false,
         error: ''
@@ -1108,32 +1260,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       console.log('[TSN MANAGER BG] 📨 Telegram report received:', {
         title: request.report.videoTitle,
-        kind: request.report.kind,
-        enabled: s.enabled,
-        hasToken: !!s.token,
-        hasChatId: !!s.chatId
+        kind: request.report.kind
       });
 
-      if (s.enabled !== false && s.token && s.chatId) {
-        try {
-          console.log('[TSN MANAGER BG] 📤 Sending Telegram message...');
-          const res = await tgApi(s.token, 'sendMessage', {
-            chat_id: s.chatId,
-            text: buildTgReport(request.report),
-            parse_mode: 'HTML',
-            disable_web_page_preview: true
-          });
-          entry.sent = !!(res && res.ok);
-          if (!entry.sent) entry.error = (res && res.description) || 'невідома помилка';
-          console.log('[TSN MANAGER BG] 📬 Telegram response:', { sent: entry.sent, error: entry.error });
-        } catch (e) {
-          entry.error = String(e.message || e);
-          console.error('[TSN MANAGER BG] ❌ Telegram API error:', entry.error);
-        }
-      } else {
-        const reason = !s.enabled ? 'disabled' : (!s.token ? 'no token' : 'no chatId');
-        entry.error = `Telegram ${reason}`;
-        console.warn('[TSN MANAGER BG] ⚠️ Telegram не налаштовано:', reason);
+      try {
+        console.log('[TSN MANAGER BG] 📤 Sending Telegram message...');
+        const senderEmail = await getOperatorEmail();
+        const res = await tgProxySend('alerts', buildTgReport(request.report, senderEmail));
+        entry.sent = !!(res && res.ok);
+        if (!entry.sent) entry.error = (res && res.error) || 'невідома помилка';
+        console.log('[TSN MANAGER BG] 📬 Telegram response:', { sent: entry.sent, error: entry.error });
+      } catch (e) {
+        entry.error = String(e.message || e);
+        console.error('[TSN MANAGER BG] ❌ Telegram API error:', entry.error);
       }
       await pushTgHistory(entry);
       sendResponse({ ok: entry.sent, error: entry.error });
@@ -1141,49 +1280,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // async
   }
 
-  // ── Telegram: тестове повідомлення ──
-  if (request.action === 'mra_tg_test') {
+  // ── Telegram: анонімний стат-пульс на КОЖНУ вставку → окремий канал ──
+  // Легший шлях за mra_tg_report: без історії та дедупу, інший chat_id.
+  if (request.action === 'mra_tg_stats') {
+    if (!TG_PROXY_URL) { sendResponse({ ok: false, error: 'tg-disabled' }); return; }
     (async () => {
       try {
-        const res = await tgApi(request.token, 'sendMessage', {
-          chat_id: request.chatId,
-          text: '✅ ТСН Менеджер підключено!\nЗвіти про проблемні мітки реклами надходитимуть у цей чат.',
-          parse_mode: 'HTML'
-        });
-        if (res && res.ok) {
-          sendResponse({ ok: true, error: '' });
-        } else {
-          sendResponse({ ok: false, error: (res && res.description) || 'невідома помилка' });
+        const res = await tgProxySend('stats', buildStatsReport(request.stats));
+        if (!(res && res.ok)) {
+          console.warn('[TSN MANAGER BG] ⚠️ Стат-пульс не доставлено:', res && res.error);
         }
+        sendResponse({ ok: !!(res && res.ok), error: (res && res.error) || '' });
       } catch (e) {
-        sendResponse({ ok: false, error: String(e.message || e) });
-      }
-    })();
-    return true; // async
-  }
-
-  // ── Telegram: визначити Chat ID з оновлень бота ──
-  if (request.action === 'mra_tg_detect_chat') {
-    (async () => {
-      try {
-        const res = await tgApi(request.token, 'getUpdates', { limit: 50 });
-        if (!res || !res.ok) {
-          sendResponse({ ok: false, error: (res && res.description) || 'Помилка getUpdates' });
-          return;
-        }
-        const seen = new Map();
-        for (const upd of (res.result || [])) {
-          const chat = (upd.message && upd.message.chat) || (upd.my_chat_member && upd.my_chat_member.chat);
-          if (chat && chat.id && !seen.has(chat.id)) {
-            seen.set(chat.id, {
-              id: chat.id,
-              title: chat.title || chat.first_name || String(chat.id),
-              type: chat.type || 'unknown'
-            });
-          }
-        }
-        sendResponse({ ok: true, chats: Array.from(seen.values()) });
-      } catch (e) {
+        console.warn('[TSN MANAGER BG] ❌ Стат-пульс помилка:', e.message);
         sendResponse({ ok: false, error: String(e.message || e) });
       }
     })();

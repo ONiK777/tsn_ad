@@ -428,166 +428,244 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // ────────────────────────────────────────────────────────────────
     // ── TELEGRAM-МОНІТОРИНГ ──
-    // ────────────────────────────────────────────────────────────────
-
-    const tgEnabledCb  = document.getElementById('tg-enabled-cb');
-    const tgTokenInput = document.getElementById('tg-token');
-    const tgTokenToggle= document.getElementById('tg-token-toggle');
-    const tgChatIdInput= document.getElementById('tg-chat-id');
-    const tgDetectBtn  = document.getElementById('tg-detect-btn');
-    const tgSaveBtn    = document.getElementById('tg-save-btn');
-    const tgTestBtn    = document.getElementById('tg-test-btn');
-    const tgStatus     = document.getElementById('tg-status');
-    const tgHistoryList= document.getElementById('tg-history-list');
-
-    function tgSetStatus(msg, type) {
-        tgStatus.textContent = msg;
-        tgStatus.className = 'tg-status' + (type ? ' ' + type : '');
-    }
-
-    // Показати / сховати токен
-    tgTokenToggle.addEventListener('click', () => {
-        tgTokenInput.type = tgTokenInput.type === 'password' ? 'text' : 'password';
-    });
-
-    // Завантажити збережені налаштування при відкритті popup
-    chrome.storage.local.get(['tgSettings', 'tgHistory'], (data) => {
-        const s = data.tgSettings || {};
-        // Дефолт для нових користувачів: якщо enabled не задано, включити (enabled: true за замовчуванням)
-        tgEnabledCb.checked = s.enabled !== false; // undefined → true, false → false, true → true
-        tgTokenInput.value  = s.token  || '';
-        tgChatIdInput.value = s.chatId || '';
-        renderTgHistory(data.tgHistory || []);
-    });
-
-    // Рендер останніх 5 записів із tgHistory
-    function renderTgHistory(history) {
-        if (!tgHistoryList) return;
-        if (!history || !history.length) {
-            tgHistoryList.innerHTML = '<div class="tg-status" style="text-align:center;">Поки що проблем не зафіксовано 🎉</div>';
-            return;
-        }
-        const items = history.slice(0, 5);
-        tgHistoryList.innerHTML = items.map(entry => {
-            const d = new Date(entry.ts);
-            const dateStr = `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-            const rawTitle = (entry.videoTitle || '').substring(0, 30) + ((entry.videoTitle || '').length > 30 ? '…' : '');
-            const title = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const sentIcon = entry.sent ? '✈️' : '⚠️';
-            // insert_failed вже враховано в problems — fail окремо не додаємо
-            if (entry.kind === 'no_spots') {
-                return `<div class="tg-history-item">${sentIcon} <span style="color:var(--text-muted);flex-shrink:0;">${dateStr}</span> «${title}» — 🔴 ВСТИК: міток не поставлено (${entry.problems || '?'})</div>`;
-            }
-            return `<div class="tg-history-item">${sentIcon} <span style="color:var(--text-muted);flex-shrink:0;">${dateStr}</span> «${title}» — проблем: ${Math.max(entry.problems || 0, entry.fail || 0)}</div>`;
-        }).join('');
-    }
-
-    // Зберегти налаштування
-    tgSaveBtn.addEventListener('click', () => {
-        const token = tgTokenInput.value.trim();
-        const chatId = tgChatIdInput.value.trim();
-
-        // Валідація: якщо ввімкнено, потрібні token і chatId
-        if (tgEnabledCb.checked && (!token || !chatId)) {
-            tgSetStatus('⚠️ Потрібні токен бота та Chat ID!', 'error');
-            setTimeout(() => tgSetStatus('', ''), 4000);
-            return;
-        }
-
-        const settings = {
-            enabled: tgEnabledCb.checked && !!token && !!chatId, // Дефолтна безпека: вимкнути якщо невпадків
-            token:   token,
-            chatId:  chatId
-        };
-        chrome.storage.local.set({ tgSettings: settings }, () => {
-            tgSetStatus('✅ Збережено!', 'ok');
-            setTimeout(() => tgSetStatus('', ''), 2500);
-        });
-    });
-
-    // Визначити Chat ID
-    tgDetectBtn.addEventListener('click', () => {
-        const token = tgTokenInput.value.trim();
-        if (!token) { tgSetStatus('⚠️ Спочатку введіть токен бота', 'err'); return; }
-        tgDetectBtn.disabled = true;
-        tgSetStatus('🔍 Шукаю чати...', '');
-        chrome.runtime.sendMessage({ action: 'mra_tg_detect_chat', token }, (res) => {
-            tgDetectBtn.disabled = false;
-            if (chrome.runtime.lastError || !res) {
-                tgSetStatus('❌ Помилка з\'єднання', 'err');
-                return;
-            }
-            if (!res.ok) {
-                tgSetStatus('❌ ' + (res.error || 'Помилка') + '. Додайте бота в групу і напишіть туди будь-яке повідомлення', 'err');
-                return;
-            }
-            const chats = res.chats || [];
-            if (!chats.length) {
-                tgSetStatus('⚠️ Чатів не знайдено. Додайте бота в групу і напишіть туди будь-яке повідомлення', 'err');
-                return;
-            }
-            // Беремо останній груповий чат (group або supergroup)
-            const group = [...chats].reverse().find(c => c.type === 'group' || c.type === 'supergroup') || chats[chats.length - 1];
-            tgChatIdInput.value = String(group.id);
-            tgSetStatus(`✅ Знайдено: «${group.title}» (${group.type})`, 'ok');
-        });
-    });
-
-    // Тестове повідомлення
-    tgTestBtn.addEventListener('click', () => {
-        const token  = tgTokenInput.value.trim();
-        const chatId = tgChatIdInput.value.trim();
-        if (!token || !chatId) { tgSetStatus('⚠️ Введіть токен та Chat ID', 'err'); return; }
-        tgTestBtn.disabled = true;
-        tgSetStatus('📨 Надсилаємо тест...', '');
-        chrome.runtime.sendMessage({ action: 'mra_tg_test', token, chatId }, (res) => {
-            tgTestBtn.disabled = false;
-            if (chrome.runtime.lastError || !res) {
-                tgSetStatus('❌ Помилка з\'єднання', 'err');
-                return;
-            }
-            if (res.ok) {
-                tgSetStatus('✅ Надіслано!', 'ok');
-            } else {
-                tgSetStatus('❌ ' + (res.error || 'Невідома помилка'), 'err');
-            }
-        });
-    });
+    // Звіти йдуть автоматично через власний проксі (див. proxy/README.md),
+    // токен живе лише на проксі — тому вкладку Telegram прибрано з UI.
 
     // ── Спеціальний функціонал для розтягування (Resize) Popup ──
-    const resizer = document.getElementById('popup-resizer');
-    let isResizing = false;
+    // ── Два фіксовані розміри вікна: більший (з нішею під 3D) і менший ──
+    const SIZE_BIG = 660;
+    const SIZE_SMALL = 460;
+    const sizeToggle = document.getElementById('size-toggle');
+    let sizeMode = localStorage.getItem('mraPopupSize') === 'small' ? 'small' : 'big';
 
-    if (resizer) {
-        const savedWidth = localStorage.getItem('mraPopupWidth');
-        const cap = Math.min(600, window.screen.availWidth - 40 || 600);
-        let w = savedWidth ? parseInt(savedWidth, 10) : 540;
-        if (!Number.isFinite(w)) w = 540;
-        w = Math.max(320, Math.min(w, cap));
+    function applySize() {
+        const cap = window.screen.availWidth - 40 || SIZE_BIG;
+        const w = Math.min(sizeMode === 'small' ? SIZE_SMALL : SIZE_BIG, cap);
         document.body.style.width = w + 'px';
+        // Клас пресету на body: 3D-фігура і сітка знають, який зараз розмір
+        document.body.classList.toggle('size-small', sizeMode === 'small');
+        document.body.classList.toggle('size-big', sizeMode !== 'small');
+        if (sizeToggle) sizeToggle.textContent = sizeMode === 'small' ? 'Більше' : 'Менше';
+    }
+    applySize();
 
-        resizer.addEventListener('mousedown', (e) => {
-            isResizing = true;
-            document.body.style.transition = 'none';
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (!isResizing) return;
-            let newWidth = e.clientX + 8;
-            const cap = Math.min(600, window.screen.availWidth - 40 || 600);
-            if (newWidth < 320) newWidth = 320;
-            if (newWidth > cap) newWidth = cap;
-
-            document.body.style.width = newWidth + 'px';
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (isResizing) {
-                isResizing = false;
-                localStorage.setItem('mraPopupWidth', document.body.style.width);
-            }
+    if (sizeToggle) {
+        sizeToggle.addEventListener('click', () => {
+            sizeMode = sizeMode === 'small' ? 'big' : 'small';
+            localStorage.setItem('mraPopupSize', sizeMode);
+            applySize();
         });
     }
+
+    // ── Changelog: автоматичний рендер з CHANGELOG.md ──
+    renderChangelog();
 });
+
+// Назви місяців для відображення дати (індекс 0 = Січень)
+const CL_MONTHS = [
+    'Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень',
+    'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'
+];
+
+// Максимум пунктів на версію (решта згортається)
+const CL_MAX_ITEMS = 12;
+
+/**
+ * Визначає badge-мітку та CSS-клас за назвою поточної ### секції
+ * @param {string} section — назва секції (рядок після ###)
+ * @returns {{ label: string, badgeClass: string, itemHot: boolean }}
+ */
+function clBadgeForSection(section) {
+    const s = section.toLowerCase();
+    if (s.includes('критичн')) {
+        return { label: '🔴 КРИТИЧНО', badgeClass: 'cl-hot', itemHot: true };
+    }
+    if (s.includes('найголовніш') || s.startsWith('🎯')) {
+        return { label: '🎯 ГОЛОВНА', badgeClass: 'cl-hot', itemHot: true };
+    }
+    if (s.includes('виправ') || s.includes('🐛')) {
+        return { label: 'ВИПРАВ', badgeClass: 'cl-fix', itemHot: false };
+    }
+    if (s.includes('технічн') || s.includes('🔧')) {
+        return { label: 'ТЕХ', badgeClass: 'cl-imp', itemHot: false };
+    }
+    if (s.includes('додатков') || s.includes('⚠️')) {
+        return { label: 'ПОКРАЩ', badgeClass: 'cl-imp', itemHot: false };
+    }
+    if (s.includes('faq') || s.includes('📚') || s.includes('ux')) {
+        return { label: 'UX', badgeClass: 'cl-ux', itemHot: false };
+    }
+    return { label: 'НОВЕ', badgeClass: 'cl-new', itemHot: false };
+}
+
+/**
+ * Очищує текст bullet-рядка від markdown-розмітки:
+ * - знімає ведучий ✅ і пробіл
+ * - розгортає **жирний** → звичайний текст
+ * - прибирає зворотні апострофи
+ * - [текст](url) → лише текст
+ * - стискає зайві пробіли
+ * @param {string} raw
+ * @returns {string}
+ */
+function clCleanBullet(raw) {
+    let t = raw.replace(/^[-*]\s*/, '');           // знімаємо маркер списку
+    t = t.replace(/^✅\s*/, '');                    // знімаємо ✅ на початку
+    t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'); // [text](url) → text
+    t = t.replace(/\*\*([^*]+)\*\*/g, '$1');        // **bold** → text
+    t = t.replace(/`([^`]+)`/g, '$1');              // `code` → text
+    t = t.replace(/\s+/g, ' ').trim();
+    return t;
+}
+
+/**
+ * Парсить CHANGELOG.md і повертає масив об'єктів версій
+ * @param {string} md — вміст CHANGELOG.md
+ * @returns {Array<{ version: string, date: string, items: Array<{ text: string, label: string, badgeClass: string, itemHot: boolean }> }>}
+ */
+function clParseMd(md) {
+    const VERSION_RE = /^## \[(\d+[^\]]*)\]\s*[—-]\s*(\d{4})-(\d{2})-(\d{2})/;
+    const SECTION_RE = /^### (.+)/;
+
+    const lines = md.split(/\r?\n/);
+    const versions = [];
+    let cur = null;         // поточна версія
+    let section = '';       // поточний ### заголовок
+
+    for (const line of lines) {
+        // Нова версія
+        const vm = line.match(VERSION_RE);
+        if (vm) {
+            cur = { version: vm[1], year: vm[2], month: parseInt(vm[3], 10), items: [] };
+            versions.push(cur);
+            section = '';
+            continue;
+        }
+
+        // Не-версійний ## заголовок («Як оновитись» тощо) — закриває поточну версію,
+        // інакше його пункти протечуть у попередню картку
+        if (/^## /.test(line)) {
+            cur = null;
+            section = '';
+            continue;
+        }
+
+        // Секція ### (лише якщо всередині версії)
+        if (cur) {
+            const sm = line.match(SECTION_RE);
+            if (sm) {
+                section = sm[1].trim();
+                continue;
+            }
+        }
+
+        // Bullet-рядок
+        if (cur && /^\s*- /.test(line)) {
+            const text = clCleanBullet(line.trim());
+            if (!text) continue;
+            const badge = clBadgeForSection(section);
+            cur.items.push({ text, ...badge });
+            continue;
+        }
+    }
+
+    return versions;
+}
+
+/**
+ * Будує DOM-картку однієї версії
+ * @param {{ version: string, year: string, month: number, items: Array }} v
+ * @param {string} currentVer — версія з manifest (для мітки «Поточна»)
+ * @returns {HTMLElement}
+ */
+function clBuildCard(v, currentVer) {
+    const isCurrent = v.version === currentVer;
+
+    const card = document.createElement('div');
+    card.className = 'cl-version' + (isCurrent ? ' cl-current' : '');
+
+    // Заголовок картки
+    const header = document.createElement('div');
+    header.className = 'cl-version-header';
+
+    const verNum = document.createElement('span');
+    verNum.className = 'cl-ver-num';
+    verNum.textContent = 'v' + v.version;
+
+    const tag = document.createElement('span');
+    tag.className = 'cl-tag ' + (isCurrent ? 'cl-tag-current' : 'cl-tag-stable');
+    tag.textContent = isCurrent ? 'Поточна' : 'Стабільна';
+
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'cl-ver-date';
+    dateSpan.textContent = CL_MONTHS[v.month - 1] + ' ' + v.year;
+
+    header.appendChild(verNum);
+    header.appendChild(tag);
+    header.appendChild(dateSpan);
+    card.appendChild(header);
+
+    // Пункти
+    const itemsWrap = document.createElement('div');
+    itemsWrap.className = 'cl-items';
+
+    const visibleItems = v.items.slice(0, CL_MAX_ITEMS);
+    const hiddenCount = v.items.length - visibleItems.length;
+
+    for (const item of visibleItems) {
+        const row = document.createElement('div');
+        row.className = 'cl-item' + (item.itemHot ? ' cl-item-hot' : '');
+
+        const badge = document.createElement('span');
+        badge.className = 'cl-badge ' + item.badgeClass;
+        badge.textContent = item.label;
+
+        row.appendChild(badge);
+        row.appendChild(document.createTextNode(item.text));
+        itemsWrap.appendChild(row);
+    }
+
+    // «…і ще N змін» якщо пунктів більше за CL_MAX_ITEMS
+    if (hiddenCount > 0) {
+        const more = document.createElement('div');
+        more.className = 'cl-item';
+        more.style.color = 'var(--text-muted)';
+        more.textContent = '…і ще ' + hiddenCount + ' змін';
+        itemsWrap.appendChild(more);
+    }
+
+    card.appendChild(itemsWrap);
+    return card;
+}
+
+/**
+ * Завантажує CHANGELOG.md і рендерить картки версій у #tab-changelog.
+ * Запускається один раз при відкритті popup.
+ */
+async function renderChangelog() {
+    const container = document.getElementById('tab-changelog');
+    const loader = document.getElementById('cl-loading');
+    if (!container) return;
+
+    let md;
+    try {
+        const resp = await fetch(chrome.runtime.getURL('CHANGELOG.md'));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        md = await resp.text();
+    } catch (err) {
+        if (loader) loader.textContent = 'Не вдалося завантажити CHANGELOG 😕';
+        return;
+    }
+
+    const versions = clParseMd(md);
+    const currentVer = chrome.runtime.getManifest().version;
+
+    // Видаляємо заглушку-лоадер
+    if (loader) loader.remove();
+
+    // Додаємо картки (CHANGELOG.md вже впорядкований від нового до старого)
+    for (const v of versions) {
+        container.appendChild(clBuildCard(v, currentVer));
+    }
+}

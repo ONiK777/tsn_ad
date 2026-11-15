@@ -49,6 +49,9 @@ function _restoreSettingsToUI() {
   const fullAutoCb = document.getElementById('mra-full-auto');
   if (fullAutoCb) fullAutoCb.checked = CONFIG.fullAutoInsert === true;
 
+  const preserveManualCb = document.getElementById('mra-preserve-manual');
+  if (preserveManualCb) preserveManualCb.checked = CONFIG.preserveManualMarks === true;
+
   const autoGapCb = document.getElementById('mra-auto-gap');
   if (autoGapCb) {
     autoGapCb.checked = CONFIG.autoGap;
@@ -110,7 +113,7 @@ function createStylesInHead() {
   --mra-cyan-glow: rgba(255, 51, 68, 0.25);
   --mra-success: #00ff66;
   --mra-success-glow: rgba(0, 255, 102, 0.25);
-  --mra-bg-panel: rgba(17, 22, 34, 0.9);
+  --mra-bg-panel: rgba(10, 14, 24, 0.84);
   --mra-border: rgba(227, 6, 19, 0.15);
   --mra-border-hover: rgba(255, 51, 68, 0.4);
 
@@ -127,7 +130,7 @@ function createStylesInHead() {
   box-shadow: 0 10px 40px rgba(0,0,0,0.8), 0 0 20px var(--mra-cyan-glow);
   font-family: 'Outfit', 'Roboto', sans-serif;
   font-size: 11px;
-  width: 340px;
+  width: 500px;
   overflow: auto;
   user-select: none;
   display: flex;
@@ -182,6 +185,11 @@ function createStylesInHead() {
 #mra-header{background:rgba(0,0,0,0.45);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid rgba(227,6,19,0.25);flex-shrink:0;height:34px;}
 #mra-title{font-weight:900;font-size:13px;color:#ffffff;text-transform:uppercase;letter-spacing:0.8px;display:flex;align-items:center;text-shadow:0 0 8px rgba(227,6,19,0.35);}
 #mra-minimize, #mra-close, #mra-reload{background:none;border:none;color:#888;cursor:pointer;font-size:16px;padding:0;line-height:1;margin-left:6px;transition:all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);outline:none;}
+#mra-size{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#ccc;border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.3px;padding:2px 8px;line-height:1.4;cursor:pointer;margin-left:6px;font-family:inherit;transition:background .2s,border-color .2s,color .2s;outline:none;}
+#mra-size:hover{background:rgba(227,6,19,0.18);border-color:rgba(227,6,19,0.45);color:#fff;}
+#mra-size:focus-visible{outline:2px solid var(--mra-primary);outline-offset:1px;}
+/* Вузький режим панелі: інша точка кадрування cover — обличчя лишається по центру */
+#mra-panel.mra-size-small #mra-bg-figure{object-position:80% 10%;}
 #mra-minimize:hover{color:#fff;text-shadow:0 0 8px rgba(255,255,255,0.5);transform:scale(1.15);}
 #mra-minimize:active{transform:scale(0.9);}
 #mra-minimize:focus-visible{outline:2px solid #ffffff;border-radius:4px;}
@@ -193,7 +201,7 @@ function createStylesInHead() {
 #mra-reload:focus-visible{outline:2px solid #00ff66;border-radius:4px;}
 #mra-body{padding:10px 12px;overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;}
 
-.ms{margin-bottom:12px;padding:12px;background:rgba(30, 41, 59, 0.4);border-radius:10px;border:1px solid rgba(227,6,19,0.12);box-shadow:inset 0 1px 0 rgba(255,255,255,0.03);transition:all 0.4s cubic-bezier(0.16, 1, 0.3, 1);}
+.ms{margin-bottom:12px;padding:12px;background:rgba(13, 18, 30, 0.42);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:10px;border:1px solid rgba(227,6,19,0.12);box-shadow:inset 0 1px 0 rgba(255,255,255,0.03);transition:all 0.4s cubic-bezier(0.16, 1, 0.3, 1);}
 .ms:hover{border-color:var(--mra-border-hover);box-shadow:0 8px 24px rgba(227, 6, 19, 0.15);transform:translateY(-2px);}
 .mst{font-size:10px;font-weight:900;color:var(--mra-cyan);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06);}
 
@@ -383,6 +391,7 @@ input:focus-visible+.msl{outline:2px solid #ffffff;outline-offset:1px;}
 .mra-wave-swatch.backup{background:#ffd166;box-shadow:0 0 8px rgba(255,209,102,.4);}
 .mra-wave-swatch.sound{width:5px;height:11px;border-radius:2px;background:linear-gradient(180deg,#b9c8dd 0%,#6b7d99 100%);box-shadow:none;}
 .mra-wave-swatch.hint{width:2px;height:11px;background:#ff9f43;box-shadow:0 0 8px rgba(255,159,67,.28);}
+.mra-wave-swatch.existing{background:#7dd3fc;box-shadow:0 0 8px rgba(125,211,252,.4);}
 
 #mra-stats {
   display: block !important;
@@ -433,8 +442,80 @@ input:focus-visible+.msl{outline:2px solid #ffffff;outline-offset:1px;}
 @keyframes mra-pulse-yellow{0%,100%{box-shadow:0 0 5px rgba(255,159,67,0.2);border-color:rgba(255,159,67,0.3)}50%{box-shadow:0 0 15px rgba(255,159,67,0.78);border-color:rgba(255,159,67,0.78)}}
 .mra-pulse-red{animation:mra-pulse-red 2s ease-in-out infinite}
 .mra-pulse-yellow{animation:mra-pulse-yellow 2.5s ease-in-out infinite}
+
+/* ═══ FAQ авто-пілота ═══ */
+.mra-faq-wrapper{margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);padding-top:4px;}
+.mra-faq-wrapper > summary{cursor:pointer;font-size:9px;font-weight:800;color:#ff9f43;letter-spacing:1px;text-transform:uppercase;padding:4px 6px;display:flex;justify-content:space-between;align-items:center;}
+.mra-faq-wrapper > summary::-webkit-details-marker{display:none;}
+.mra-faq-wrapper > summary::after{content:'▼';font-size:8px;color:#ff9f43;transition:transform 0.15s ease-in-out;}
+.mra-faq-wrapper[open] > summary::after{transform:rotate(180deg);}
+
+#mra-faq{margin-top:4px;}
+#mra-faq details{border-top:1px solid rgba(255,255,255,0.05);}
+#mra-faq details:first-child{border-top:none;}
+#mra-faq summary{cursor:pointer;font-size:10px;font-weight:700;color:#cfd6e4;padding:5px 4px;list-style:none;display:flex;justify-content:space-between;align-items:center;transition:color .15s;}
+#mra-faq summary::-webkit-details-marker{display:none;}
+#mra-faq summary::after{content:'+';font-size:12px;font-weight:700;color:#ff9f43;flex-shrink:0;margin-left:5px;line-height:1;}
+#mra-faq details[open] summary::after{content:'−';}
+#mra-faq summary:hover{color:#fff;}
+#mra-faq .mra-faq-a{font-size:9.5px;color:#bcc8dc;line-height:1.55;padding:0 4px 7px;user-select:text;-webkit-user-select:text;text-shadow:0 1px 3px rgba(0,0,0,0.6);}
+
+/* ── Фонова 3D-фігура (скраб мишею, дзеркало popup_bg.js) ── */
+#mra-bg-stage{position:absolute;inset:0;z-index:0;overflow:hidden;border-radius:inherit;pointer-events:none;}
+#mra-bg-figure{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:88% 10%;opacity:0;transition:opacity .7s ease;}
+#mra-bg-figure.ready{opacity:0.85;}
+#mra-bg-points{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .6s ease;}
+#mra-bg-points.ready{opacity:1;}
+#mra-bg-stage.webgl-active #mra-bg-figure{opacity:0 !important;}
+.mra-bg-glow{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% -10%, rgba(255,45,63,0.10) 0%, transparent 55%),radial-gradient(80% 50% at 100% 110%, rgba(255,182,39,0.05) 0%, transparent 60%);}
+/* Легкий неон по зоні фігури (screen — лише додає світла);
+   відтінок --mra-neon-h міняється рандомно на натискання клавіш */
+@property --mra-neon-h { syntax:'<number>'; inherits:false; initial-value:352; }
+.mra-fig-neon{position:absolute;inset:0;mix-blend-mode:screen;background:radial-gradient(42% 55% at 48% 28%, hsl(var(--mra-neon-h) 100% 56% / 0.26) 0%, hsl(var(--mra-neon-h) 100% 56% / 0.09) 45%, transparent 72%);transition:--mra-neon-h 0.6s ease;}
+#mra-header{position:relative;z-index:1;}
+#mra-body{position:relative;z-index:1;}
+#mra-panel.mra-minimized #mra-bg-stage{display:none;}
     `;
     document.head.appendChild(styleEl);
+  }
+}
+
+// Валера: фонова 3D-фігура з інтерактивним WebGL 3D Point Cloud рушієм
+function _initFigureScrub(panel) {
+  const stage = panel.querySelector('#mra-bg-stage');
+  const video = panel.querySelector('#mra-bg-figure');
+  const canvas = panel.querySelector('#mra-bg-points');
+  const neon = panel.querySelector('.mra-fig-neon');
+  const scroller = panel.querySelector('#mra-body');
+  if (!video || !chrome.runtime?.id) return;
+
+  if (window.initValeraPointCloud) {
+    window.initValeraPointCloud({
+      stage,
+      video,
+      canvas,
+      neon,
+      scroller,
+      boundsEl: panel,
+      actionRoot: panel,
+      atlasUrl: chrome.runtime.getURL('media/figure_atlas.webp'),
+      atlasCols: 12,
+      atlasRows: 20,
+      atlasFrames: 238,
+      videoUrl: chrome.runtime.getURL('media/figure_dark.mp4'),
+      fetchAsBlob: true,
+      cols: 175,
+      rows: 160,
+      scale: 0.80,
+      yShift: -0.04,
+      pointSize: 2.45,
+      threshold: 0.065,
+      opY: 10,
+      getBaseOP: () => panel.classList.contains('mra-size-small') ? 80 : 88,
+      getEndOP: () => panel.classList.contains('mra-size-small') ? 67 : 64,
+      isPaused: () => panel.classList.contains('mra-minimized'),
+      trackListener: addTrackedEventListener
+    });
   }
 }
 
@@ -446,10 +527,12 @@ function createPanel() {
   const panel = document.createElement('div');
   panel.id = 'mra-panel';
   panel.innerHTML = `
+<div id="mra-bg-stage" aria-hidden="true"><video id="mra-bg-figure" muted playsinline preload="none" tabindex="-1" title="Валера" disablepictureinpicture disableremoteplayback></video><canvas id="mra-bg-points"></canvas><div class="mra-bg-glow"></div><div class="mra-fig-neon"></div></div>
 <div id="mra-live-bar" aria-hidden="true"></div>
 <div id="mra-header">
   <div id="mra-title"><span style="background:var(--mra-primary);background-image:var(--mra-primary-grad);color:#fff;padding:2px 6px;border-radius:4px;margin-right:8px;box-shadow:0 0 10px rgba(255,46,85,0.5);">ТСН</span> АВТОРЕКЛАМА</div>
   <div style="display:flex;align-items:center;gap:6px">
+    <button id="mra-size" title="Перемкнути розмір панелі" aria-label="Перемкнути розмір панелі">Менше</button>
     <button id="mra-reload" title="Перезапустити розширення (Очистити дані)" aria-label="Перезапустити розширення">↻</button>
     <button id="mra-minimize" title="Згорнути" aria-label="Згорнути панель">−</button>
     <button id="mra-close" title="Закрити панель" aria-label="Закрити панель">✕</button>
@@ -465,14 +548,53 @@ function createPanel() {
       <label class="mtl" for="mra-auto-gap" style="font-weight:700;color:#fff;">Бот вирішує сам</label>
     </div>
     <div id="mra-auto-sect" style="color:#9aa7bd;font-size:10px;line-height:1.5;padding:2px 6px 0;">
-      Сам рахує ціль за хронометражем (стандарт ТСН — 1 реклама / ~2 хв), шукає природні паузи,
-      за потреби піднімає чутливість, добиває ритм запасними мітками і пересуває червоні
-      за вердиктом YouTube. Після аналізу нижче з'явиться діагноз відео.
+      Сам рахує ціль за хронометражем (стандарт ТСН — 1 реклама / ~2 хв), пріоритетно знаходить природні
+      паузи, заповнює великі прогалини в найтихіших місцях та може зберігати вже розставлені ручні мітки.
+      Після аналізу нижче з'явиться діагноз відео.
+      <details class="mra-faq-wrapper">
+        <summary>FAQ — як бот вирішує</summary>
+        <div id="mra-faq">
+          <details>
+            <summary>Що саме бот робить сам?</summary>
+            <div class="mra-faq-a">Рахує ціль за хронометражем (стандарт ТСН — приблизно 1 реклама на 2 хвилини), аналізує вейвформу, пріоритетно ставить мітки у природні паузи мови та заповнює прогалини в найтихіших доступних місцях. За бажанням зберігає вже існуючі ручні мітки як непорушні якорі.</div>
+          </details>
+
+          <details>
+            <summary>Що буде, якщо природних пауз мало?</summary>
+            <div class="mra-faq-a">Бот адаптивно коригує чутливість до тиші. Якщо пауз усе одно бракує, він заповнює великі прогалини запасними мітками (жовті на вейвформі) у найтихіших точках відрізка — щоб реклама не «провисала».</div>
+          </details>
+
+          <details>
+            <summary>Чим запасні мітки відрізняються від природних?</summary>
+            <div class="mra-faq-a">Природні паузи — це чиста тиша між фразами. Запасні мітки ставляться в найтихіших доступних місцях, якщо повноцінної паузи в інтервалі немає, щоб уникнути довгих інтервалів без реклами.</div>
+          </details>
+
+          <details>
+            <summary>Чи можу я втрутитися вручну?</summary>
+            <div class="mra-faq-a">Так. Клік по вейвформі додає або прибирає мітку (вона примагнітиться до найближчої паузи), Ctrl+клік — прослухати місце. А якщо вимкнути «Бот вирішує сам», відкриються ручні налаштування ритму та чутливості.</div>
+          </details>
+
+          <details>
+            <summary>Що таке «Авто-вставка (нуль кліків)»?</summary>
+            <div class="mra-faq-a">Повний автопілот: відкрили редактор відео без міток — бот сам аналізує, виставляє оптимальні мітки та зберігає. Нуль зайвих рухів. Відео з уже наявними мітками не чіпає.</div>
+          </details>
+
+          <details>
+            <summary>Як працює збереження ручних міток?</summary>
+            <div class="mra-faq-a">Якщо увімкнено «Зберігати ручні мітки», бот зчитує вже наявні мітки автора як фіксовані якорі і лише доставляє рекламу у великі прогалини (> 2.5 хв), не видаляючи вашу розмітку.</div>
+          </details>
+
+          <details>
+            <summary>Як бот враховує авто-мітки YouTube?</summary>
+            <div class="mra-faq-a">Під час аналізу бот запам'ятовує позиції «Рекламних місць (автоматичних)» YouTube як 100%-якорі — це місця, які YT сам вважає природними. При вставці бот знімає чекбокс «Автоматичні рекламні місця» (вони зникають), видаляє всі решту непотрібних міток і ставить повний узгоджений план заново: якорі YT + природні паузи. Жодне вдале місце не губиться.</div>
+          </details>
+        </div>
+      </details>
     </div>
     <div id="mra-manual-sect" style="display:none">
       ${row('Реклама кожні (с):', stepper('mra-min-gap', 120, 1, 7200, 1), 'Ручний ритм: мітка приблизно кожні N секунд у найближчій паузі')}
       ${row('Гнучкість ритму (±%):', stepper('mra-flex', 50, 10, 90, 5), 'Наскільки далеко від ритму можна зміститись заради паузи.\\n±50% від інтервалу = стандарт.\\nМенше = суворий ритм, більше = пріоритет паузам')}
-      ${row('Мін. якість паузи (%):', stepper('mra-min-quality', 0, 0, 90, 5), '0 = будь-яка тиша\\n55+ = лише «добрі» паузи\\n78+ = лише «люкс»\\nПаузи нижче фільтра ігноруються — замість них спрацюють запасні (якщо увімкнені)')}
+      ${row('Мін. якість паузи (%):', stepper('mra-min-quality', 0, 0, 90, 5), '0 = будь-яка тиша\\n70+ = лише «добрі» паузи (межа прийняття YouTube)\\n78+ = лише «люкс»\\nПаузи нижче фільтра ігноруються — замість них спрацюють запасні (якщо увімкнені)')}
       ${row('Пропустити початок (с):', stepper('mra-start-skip', 10, 0, 600, 5), 'Не ставити рекламу в перші N секунд відео')}
       ${row('Пропустити кінець (с):', stepper('mra-end-skip', 15, 0, 600, 5), 'Не ставити рекламу в останні N секунд відео')}
     </div>
@@ -483,7 +605,11 @@ function createPanel() {
     <div>
       <div class="mtw">
         <label class="mt"><input type="checkbox" id="mra-full-auto"><span class="msl"></span></label>
-        <label class="mtl" for="mra-full-auto" style="font-weight:600;color:#ffd166;" title="Відкрив редактор відео БЕЗ міток → бот сам: аналіз → вставка → перевірка YouTube → збереження. Нуль кліків. Відео з мітками не чіпає.">⚡ Авто-вставка (нуль кліків)</label>
+        <label class="mtl" for="mra-full-auto" style="font-weight:600;color:#ffd166;" title="Відкрив редактор відео БЕЗ міток → бот сам: аналіз → вставка → збереження. Нуль кліків. Відео з мітками не чіпає.">⚡ Авто-вставка (нуль кліків)</label>
+      </div>
+      <div class="mtw" style="margin-top:6px;">
+        <label class="mt"><input type="checkbox" id="mra-preserve-manual"><span class="msl"></span></label>
+        <label class="mtl" for="mra-preserve-manual" title="Не видаляє існуючі ручні мітки на відео — залишає їх як якорі й доставляє рекламу лише у великі прогалини (> 2.5 хв).">📌 Зберігати ручні мітки (доповнити прогалини)</label>
       </div>
       <div class="mtw" style="margin-top:6px;">
         <label class="mt"><input type="checkbox" id="mra-focus-start" checked><span class="msl"></span></label>
@@ -539,6 +665,7 @@ function createPanel() {
       <span class="mra-wave-chip"><span class="mra-wave-swatch"></span>авто</span>
       <span class="mra-wave-chip"><span class="mra-wave-swatch manual"></span>вручну</span>
       <span class="mra-wave-chip"><span class="mra-wave-swatch backup"></span>запасна</span>
+      <span class="mra-wave-chip"><span class="mra-wave-swatch existing"></span>вже на відео</span>
       <span class="mra-wave-chip"><span class="mra-wave-swatch sound"></span>звук</span>
       <span class="mra-wave-chip"><span class="mra-wave-swatch hint"></span>можна вручну</span>
     </div>
@@ -558,6 +685,8 @@ function createPanel() {
 
   document.body.appendChild(panel);
 
+  _initFigureScrub(panel);
+
   _restoreSettingsToUI();
 
   const keyBlocker = (e) => {
@@ -567,7 +696,7 @@ function createPanel() {
     }
   };
   ['keydown', 'keyup', 'keypress'].forEach(evtType => {
-    addTrackedEventListener(window, evtType, keyBlocker, { capture: true });
+    addPanelEventListener(window, evtType, keyBlocker, { capture: true });
   });
 
   let analyzeTimer = null;
@@ -651,8 +780,8 @@ function createPanel() {
     attachPointerEvents(btnM, false);
     attachPointerEvents(btnP, true);
 
-    addTrackedEventListener(window, 'mouseup', stopHold);
-    addTrackedEventListener(window, 'touchend', stopHold);
+    addPanelEventListener(window, 'mouseup', stopHold);
+    addPanelEventListener(window, 'touchend', stopHold);
 
     valEl.style.cursor = 'pointer';
     const onValClick = () => {
@@ -713,6 +842,15 @@ function createPanel() {
       saveSettings();
       // Якщо щойно увімкнули на сторінці з відео без міток — стартуємо одразу
       if (fullAutoCbEvt.checked && typeof maybeFullAutoRun === 'function') maybeFullAutoRun();
+    });
+  }
+
+  const preserveManualCbEvt = document.getElementById('mra-preserve-manual');
+  if (preserveManualCbEvt) {
+    preserveManualCbEvt.addEventListener('change', () => {
+      CONFIG.preserveManualMarks = preserveManualCbEvt.checked;
+      saveSettings();
+      triggerAutoAnalyze();
     });
   }
 
@@ -948,8 +1086,8 @@ function createPanel() {
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
-    const autoAdsCheckbox = document.querySelector('div[role="checkbox"][aria-label="Автоматичні рекламні місця"]');
-    if (autoAdsCheckbox && autoAdsCheckbox.getAttribute('aria-checked') === 'true') {
+    const autoAdsCheckbox = findAutoAdsCheckbox();
+    if (autoAdsCheckbox && (autoAdsCheckbox.getAttribute('aria-checked') === 'true' || autoAdsCheckbox.checked)) {
       log('⚙️ Вимикаємо "Автоматичні рекламні місця" від YouTube...', 'info');
       autoAdsCheckbox.click();
       await sleep(400);
@@ -988,6 +1126,7 @@ function createPanel() {
 
   document.getElementById('mra-close').addEventListener('click', () => {
     isPanelClosedByUser = true;
+    cleanupPanel();
     panel.remove();
     createReopenButton();
   });
@@ -1004,9 +1143,12 @@ function createPanel() {
     state.silences = [];
     state.selected = [];
     state.analysisMeta = null;
+    state.existingMarks = [];
+    state.ytAutoMarks = [];
     offscreenCanvas = null;
     lastRenderSignature = null;
     isPanelClosedByUser = false;
+    cleanupPanel();
     panel.remove();
   });
 
@@ -1025,8 +1167,27 @@ function createPanel() {
   };
   const onMouseUp = () => { isDragging = false; };
 
-  addTrackedEventListener(document, 'mousemove', onMouseMove);
-  addTrackedEventListener(document, 'mouseup', onMouseUp);
+  addPanelEventListener(document, 'mousemove', onMouseMove);
+  addPanelEventListener(document, 'mouseup', onMouseUp);
+
+  // Два пресети розміру (як у попапі) + синхронізація з реальною шириною:
+  // клас .mra-size-small керує кадруванням фігури, кнопка показує наступну дію
+  const PANEL_BIG = 500;
+  const PANEL_SMALL = 360;
+  const sizeBtn = document.getElementById('mra-size');
+  const syncSizeUI = () => {
+    const w = panel.getBoundingClientRect().width;
+    const small = w < 440;
+    panel.classList.toggle('mra-size-small', small);
+    if (sizeBtn) sizeBtn.textContent = small ? 'Більше' : 'Менше';
+  };
+  if (sizeBtn) {
+    sizeBtn.addEventListener('click', () => {
+      const small = panel.getBoundingClientRect().width < 440;
+      panel.style.width = (small ? PANEL_BIG : PANEL_SMALL) + 'px';
+      syncSizeUI();
+    });
+  }
 
   // Гумово: відновлюємо вибраний розмір, але обмежуємо поточним екраном (адаптивність)
   const applyAdaptiveSize = () => {
@@ -1039,24 +1200,29 @@ function createPanel() {
     if (cur.left < 0) { panel.style.left = '8px'; panel.style.right = 'auto'; }
   };
 
-  safeChromeStorageGet(['mraPanelWidth', 'mraPanelHeight'], (data) => {
+  // Ключі v2: даємо всім новий дефолт 500px (старий збережений розмір ігнорується)
+  safeChromeStorageGet(['mraPanelWidth2', 'mraPanelHeight2'], (data) => {
     const clampPx = (val, min, max) => {
       const n = parseInt(val, 10);
       if (!Number.isFinite(n)) return null;
       return Math.max(min, Math.min(n, max)) + 'px';
     };
-    const w = clampPx(data.mraPanelWidth, 300, Math.max(300, window.innerWidth - 24));
-    const h = clampPx(data.mraPanelHeight, 200, Math.max(200, window.innerHeight - 80));
+    const w = clampPx(data.mraPanelWidth2, 300, Math.max(300, window.innerWidth - 24));
+    const h = clampPx(data.mraPanelHeight2, 200, Math.max(200, window.innerHeight - 80));
     if (w) panel.style.width = w;
     if (h) panel.style.height = h;
     applyAdaptiveSize();
+    syncSizeUI();
   });
 
   // Підлаштування під розмір вікна браузера на льоту
-  addTrackedEventListener(window, 'resize', applyAdaptiveSize);
+  addPanelEventListener(window, 'resize', applyAdaptiveSize);
 
   let resizeTimer, waveTimer;
-  new ResizeObserver(() => {
+  const panelResizeObs = new ResizeObserver(() => {
+    // Панель «розуміє» свій розмір: клас пресету і напис на кнопці — завжди актуальні
+    syncSizeUI();
+
     // Чітка перемальовка вейвформи під нову ширину/висоту панелі (гумово)
     clearTimeout(waveTimer);
     waveTimer = setTimeout(() => {
@@ -1066,11 +1232,13 @@ function createPanel() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       safeChromeStorageSet({
-        mraPanelWidth: panel.style.width,
-        mraPanelHeight: panel.style.height
+        mraPanelWidth2: panel.style.width,
+        mraPanelHeight2: panel.style.height
       });
     }, 500);
-  }).observe(panel);
+  });
+  panelResizeObs.observe(panel);
+  panelObservers.push(panelResizeObs);
 
   if (typeof runHealthCheck === 'function') runHealthCheck();
 }

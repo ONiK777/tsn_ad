@@ -16,8 +16,8 @@
 
       --bg-base: #07090f;          /* near-black studio backdrop */
       --bg-elevated: #0d111b;
-      --surface: rgba(20, 25, 38, 0.72);
-      --surface-2: rgba(13, 17, 27, 0.85);
+      --surface: rgba(16, 20, 32, 0.38);
+      --surface-2: rgba(13, 17, 27, 0.55);
 
       --border: rgba(255, 45, 63, 0.14);
       --border-strong: rgba(255, 45, 63, 0.4);
@@ -41,11 +41,12 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      width: 540px;
+      /* Дефолт 660px: справа лишається вільна «ніша» під 3D-фігуру */
+      width: 660px;
       min-width: 320px;
-      max-width: 600px;
+      max-width: 760px;
       /* Гумова висота: підлаштовується під контент, не скролить (стеля Chrome ~600px) */
-      min-height: 340px;
+      min-height: 580px;
       max-height: 600px;
       background:
         radial-gradient(120% 80% at 50% -10%, rgba(255, 45, 63, 0.16) 0%, transparent 55%),
@@ -74,22 +75,98 @@
         transparent 3px
       );
       pointer-events: none;
-      z-index: 0;
+      z-index: 1;
       opacity: 0.6;
     }
 
-    #popup-resizer {
+    /* ════════════════════════════════════════════
+       ФОНОВА 3D-ФІГУРА (скраб мишею — popup_bg.js)
+       ════════════════════════════════════════════ */
+    #bg-stage {
       position: fixed;
-      bottom: 0; right: 0;
-      width: 14px; height: 14px;
-      cursor: nwse-resize;
-      z-index: 9999;
-      background: linear-gradient(135deg, transparent 50%, rgba(255, 45, 63, 0.4) 50%);
-      border-bottom-right-radius: 4px;
-      transition: background 0.2s;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
     }
-    #popup-resizer:hover {
-      background: linear-gradient(135deg, transparent 50%, var(--tsn-red) 80%);
+    #bg-figure {
+      /* Як в оригінальному дизайні: cover на все вікно — краї кадру = краї
+         вікна, композиція цілісна на будь-якому розмірі. Обличчя у кадрі
+         стоїть на ~71.5% ширини (виміряно по сітці); object-position
+         калібрований під пресети так, щоб воно сідало у нішу справа */
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      /* Обличчя (71.5% ширини кадру) — по центру вікна */
+      object-position: 100% 0%;
+      opacity: 0;
+      /* filter анімує JS-двигун відтінку (popup_bg.js), transition йому б заважав */
+      transition: opacity .7s ease;
+    }
+    #bg-figure.ready { opacity: 1; }
+    #bg-points {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      opacity: 0;
+      transition: opacity 0.6s ease;
+    }
+    #bg-points.ready { opacity: 1; }
+    #bg-stage.webgl-active #bg-figure {
+      opacity: 0 !important;
+    }
+    #bg-stage .bg-glow {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(120% 80% at 50% -10%, rgba(255, 45, 63, 0.12) 0%, transparent 55%),
+        radial-gradient(80% 50% at 100% 110%, rgba(255, 182, 39, 0.05) 0%, transparent 60%);
+    }
+    /* Легкий неон по зоні фігури (screen — лише додає світла).
+       Відтінок --neon-h анімований: міняється рандомно на натискання клавіш */
+    @property --neon-h {
+      syntax: '<number>';
+      inherits: false;
+      initial-value: 352;
+    }
+    #bg-stage .bg-neon {
+      position: absolute;
+      inset: 0;
+      mix-blend-mode: screen;
+      background: radial-gradient(42% 55% at 52% 26%,
+        hsl(var(--neon-h) 100% 56% / 0.24) 0%,
+        hsl(var(--neon-h) 100% 56% / 0.08) 45%,
+        transparent 72%);
+      transition: --neon-h 0.6s ease;
+    }
+
+    /* Перемикач двох фіксованих розмірів вікна (більший/менший) */
+    #size-toggle {
+      font-size: 9px;
+      font-weight: 700;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 8px;
+      border-radius: 99px;
+      border: 1px solid var(--border-soft);
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 0.3px;
+      line-height: 1.4;
+      transition: background .2s, border-color .2s;
+      outline: none;
+    }
+    #size-toggle:hover {
+      background: rgba(255, 45, 63, 0.15);
+      border-color: rgba(255, 45, 63, 0.4);
+    }
+    #size-toggle:focus-visible {
+      outline: 2px solid var(--tsn-red);
+      outline-offset: 1px;
     }
 
     ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -126,9 +203,9 @@
       align-items: center;
       gap: 8px;
       padding: 11px 13px;
-      background: linear-gradient(180deg, rgba(13, 17, 27, 0.95), rgba(13, 17, 27, 0.78));
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      background: linear-gradient(180deg, rgba(13, 17, 27, 0.82), rgba(13, 17, 27, 0.55));
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
       z-index: 10;
@@ -213,6 +290,8 @@
     .tabs {
       display: flex;
       background: var(--surface-2);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
       padding: 5px;
       gap: 5px;
@@ -293,8 +372,8 @@
 
     .card {
       background: var(--surface);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 11px;
@@ -806,7 +885,9 @@
     .cl-version {
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.06);
-      background: rgba(13, 17, 27, 0.7);
+      background: rgba(13, 17, 27, 0.55);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
       overflow: hidden;
     }
     .cl-version.cl-current {
@@ -959,11 +1040,22 @@
     /* ════════════════════════════════════════════
        RESPONSIVE (wide popup)
        ════════════════════════════════════════════ */
+    /* ── Менший пресет: та сама центральна композиція,
+       лише інша точка кадрування cover ── */
+    body.size-small #bg-figure { object-position: 88% 0%; }
+    body.size-small #bg-stage .bg-neon {
+      background: radial-gradient(46% 52% at 50% 26%,
+        hsl(var(--neon-h) 100% 56% / 0.24) 0%,
+        hsl(var(--neon-h) 100% 56% / 0.08) 45%,
+        transparent 72%);
+    }
+
     @media (min-width: 500px) {
-      /* Широкий popup → 2 колонки, картки природної висоти (без розтягування) */
+      /* Широкий popup → 2 колонки */
       .tab-content.active#tab-main {
         flex-direction: row;
         align-items: flex-start;
+        flex-wrap: wrap;
         gap: 12px;
       }
       .tab-content.active#tab-main > div {
@@ -993,9 +1085,111 @@
         transition-duration: 0.001ms !important;
       }
     }
+
+    /* ════════════════════════════════════════════
+       PRELOADER (Екран завантаження)
+       ════════════════════════════════════════════ */
+    #app-preloader {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: var(--bg-base);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.35s cubic-bezier(0.25, 1, 0.5, 1), visibility 0.35s;
+      opacity: 1;
+      visibility: visible;
+    }
+    #app-preloader.fade-out {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .preloader-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      transform: scale(1);
+      transition: transform 0.35s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    #app-preloader.fade-out .preloader-content {
+      transform: scale(0.92);
+    }
+    .preloader-logo {
+      background: linear-gradient(135deg, var(--tsn-red) 0%, var(--tsn-red-dark) 100%);
+      color: #fff;
+      font-weight: 900;
+      font-size: 24px;
+      padding: 8px 20px;
+      border-radius: 10px;
+      letter-spacing: 2px;
+      box-shadow: 0 0 24px rgba(255, 45, 63, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      animation: preloader-pulse-logo 2s infinite ease-in-out;
+    }
+    @keyframes preloader-pulse-logo {
+      0%, 100% {
+        box-shadow: 0 0 18px rgba(255, 45, 63, 0.4), inset 0 1px 0 rgba(255,255,255,0.2);
+        transform: scale(1);
+      }
+      50% {
+        box-shadow: 0 0 32px rgba(255, 45, 63, 0.8), inset 0 1px 0 rgba(255,255,255,0.3);
+        transform: scale(1.04);
+      }
+    }
+    .preloader-spinner-box {
+      position: relative;
+      width: 32px;
+      height: 32px;
+      margin-top: 4px;
+    }
+    .preloader-spinner {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      border: 2px solid rgba(255, 255, 255, 0.05);
+      border-top-color: var(--tsn-red);
+      border-right-color: var(--tsn-gold);
+      border-radius: 50%;
+      animation: preloader-spin 0.8s linear infinite;
+    }
+    @keyframes preloader-spin {
+      to { transform: rotate(360deg); }
+    }
+    .preloader-status {
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      animation: preloader-pulse-text 1.6s infinite ease-in-out;
+    }
+    @keyframes preloader-pulse-text {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; color: var(--text-secondary); }
+    }
   </style>
 </head>
 <body>
+
+  <div id="app-preloader">
+    <div class="preloader-content">
+      <div class="preloader-logo">ТСН</div>
+      <div class="preloader-spinner-box">
+        <div class="preloader-spinner"></div>
+      </div>
+      <div class="preloader-status">Завантаження</div>
+    </div>
+  </div>
+
+  <div id="bg-stage" aria-hidden="true">
+    <video id="bg-figure" src="../media/figure_dark.mp4" muted playsinline preload="none" tabindex="-1" title="Валера" disablepictureinpicture disableremoteplayback></video>
+    <canvas id="bg-points"></canvas>
+    <div class="bg-glow"></div>
+    <div class="bg-neon"></div>
+  </div>
 
   <div class="live-bar" aria-hidden="true"></div>
 
@@ -1004,6 +1198,7 @@
     <div class="header-title" id="ext-title"></div>
     <div class="header-right">
       <span class="on-air" aria-hidden="true"><span class="dot"></span>BOT</span>
+      <button id="size-toggle" title="Перемкнути розмір вікна" aria-label="Перемкнути розмір вікна">Менше</button>
       <div class="header-version" id="ext-version"></div>
     </div>
   </div>
@@ -1016,10 +1211,6 @@
     <button class="tab-btn" data-tab="notifications">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
       Сповіщення
-    </button>
-    <button class="tab-btn" data-tab="telegram">
-      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-      Telegram
     </button>
     <button class="tab-btn" data-tab="changelog">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -1225,105 +1416,16 @@
     </div>
   </div><!-- /tab-notifications -->
 
-  <!-- ═══ TAB: Telegram ═══ -->
-  <div class="tab-content" id="tab-telegram">
-    <div>
-      <div class="section-title">
-        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-        Telegram-моніторинг
-      </div>
-      <div class="card">
-
-        <!-- Перемикач: Звіти в Telegram -->
-        <div class="setting-row">
-          <div class="setting-info">
-            <label class="setting-name" for="tg-enabled-cb">Звіти в Telegram</label>
-            <span class="setting-desc">Надсилати звіт при проблемах зі вставкою міток</span>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="tg-enabled-cb" checked>
-            <span class="slider"></span>
-          </label>
-        </div>
-        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:8px 0;">
-
-        <!-- Токен бота -->
-        <div style="margin-bottom:10px;">
-          <div class="setting-desc" style="margin-bottom:4px;">Токен бота</div>
-          <div class="tg-input-row">
-            <input type="password" class="tg-input" id="tg-token" placeholder="123456:ABC-DEF..." autocomplete="off" spellcheck="false">
-            <button type="button" class="tg-btn-sm" id="tg-token-toggle" title="Показати / сховати токен">👁</button>
-          </div>
-        </div>
-
-        <!-- Chat ID -->
-        <div style="margin-bottom:10px;">
-          <div class="setting-desc" style="margin-bottom:4px;">Chat ID групи</div>
-          <div class="tg-input-row">
-            <input type="text" class="tg-input" id="tg-chat-id" placeholder="-1001234567890" autocomplete="off" spellcheck="false">
-            <button type="button" class="tg-btn-sm" id="tg-detect-btn">🔍 Визначити</button>
-          </div>
-        </div>
-
-        <!-- Статусний рядок -->
-        <div class="tg-status" id="tg-status"></div>
-
-        <!-- Кнопки -->
-        <div style="display:flex;gap:7px;margin-top:10px;">
-          <button type="button" class="btn btn-primary" id="tg-save-btn" style="min-height:34px;font-size:11.5px;padding:5px 10px;">
-            💾 Зберегти
-          </button>
-          <button type="button" class="btn btn-secondary" id="tg-test-btn" style="min-height:34px;font-size:11.5px;padding:5px 10px;">
-            📨 Тест
-          </button>
-        </div>
-
-      </div>
-    </div>
-
-    <!-- Остання історія подій -->
-    <div>
-      <div class="section-title">
-        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-        Останні події
-      </div>
-      <div class="card" id="tg-history-card">
-        <div id="tg-history-list" style="display:flex;flex-direction:column;gap:0;">
-          <div class="tg-status" style="text-align:center;">Завантаження...</div>
-        </div>
-      </div>
-    </div>
-  </div><!-- /tab-telegram -->
-
   <!-- ═══ TAB: Оновлення ═══ -->
   <div class="tab-content" id="tab-changelog">
-
-    <!-- v4.1.0 — ПОТОЧНА -->
-    <div class="cl-version cl-current">
-      <div class="cl-version-header">
-        <span class="cl-ver-num">v4.1.0</span>
-        <span class="cl-tag cl-tag-current">Поточна</span>
-        <span class="cl-ver-date">Червень 2026</span>
-      </div>
-      <div class="cl-items">
-        <div class="cl-item cl-item-hot"><span class="cl-badge cl-hot">🔴 КРИТИЧНО</span>Telegram-моніторинг — налаштуй токен бота й отримуй звіти про проблемні мітки прямо в групу</div>
-        <div class="cl-item cl-item-hot"><span class="cl-badge cl-hot">🎯 ГОЛОВНА</span>Звіт про видео ВСТИК — коли природних пауз нема, бот одразу повідомляє: мітки ставити нікуди, видео потребує переправки</div>
-        <div class="cl-item"><span class="cl-badge cl-new">НОВЕ</span>Вкладка Telegram — введіть токен (приховано), Chat ID, кнопка 🔍 Визначити, 📨 Тест, 💾 Зберегти</div>
-        <div class="cl-item"><span class="cl-badge cl-new">НОВЕ</span>Історія інцидентів — остатні 50 проблемних міток у storage, остатні 5 видно в попапі з датою і статусом</div>
-        <div class="cl-item"><span class="cl-badge cl-new">НОВЕ</span>Звіти містять: назву відео, хронометраж, посилання на редактор, яка саме проблема, як її виправити</div>
-        <div class="cl-item cl-item-hot"><span class="cl-badge cl-hot">🔥 ГАРЯЧЕ</span>Сніфер підказок YouTube — перехоплює власні "природні паузи" YT з мережі і ставить мітки саме в них</div>
-        <div class="cl-item"><span class="cl-badge cl-imp">ПОКРАЩ</span>Підрахунок проблем — звіти про вставку враховують ВСІ проблеми без дублювання</div>
-        <div class="cl-item"><span class="cl-badge cl-imp">ПОКРАЩ</span>Авто-пілот тепер ставить лише паузи ≥55% якості — емпірична межа прийняття YT (слабші не ставляться взагалі)</div>
-        <div class="cl-item"><span class="cl-badge cl-fix">ВИПРАВ</span>Таймаут очікування завершення трансляції — підняти з 20с до 40с (бо пошук кнопки може тривати до 36с)</div>
-      </div>
-    </div>
-
+    <!-- Картки версій будуються автоматично з CHANGELOG.md (popup.js → renderChangelog) -->
+    <div id="cl-loading" style="font-size:11px;color:var(--text-muted);padding:8px 4px;">Завантаження історії оновлень…</div>
   </div><!-- /tab-changelog -->
 
   </div>
 
-  <div id="popup-resizer" title="Потягніть, щоб змінити ширину"></div>
-
+  <script src="valera_cloud.js"></script>
+  <script src="popup_bg.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

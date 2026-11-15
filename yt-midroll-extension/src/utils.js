@@ -184,6 +184,33 @@ function findConfirmButton() {
   return null;
 }
 
+// Пошук чекбокса автоматичних рекламних місць YouTube (мультимовний)
+function findAutoAdsCheckbox() {
+  const candidates = document.querySelectorAll('div[role="checkbox"], ytcp-checkbox-lit, tp-yt-paper-checkbox');
+  const pattern = /автоматичн.*реклам|automatic ad break|автоматическ.*реклам/i;
+  for (const el of candidates) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+    const label = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '');
+    if (pattern.test(label)) return el;
+  }
+  return document.querySelector('div[role="checkbox"][aria-label*="Автоматичні рекламні"]');
+}
+
+// Стабільний ідентифікатор поточного відео (без підписаних параметрів запиту)
+function getCurrentVideoKey() {
+  const videoIdMatch = window.location.pathname.match(/\/video\/([^/]+)/);
+  if (videoIdMatch && videoIdMatch[1]) {
+    return videoIdMatch[1];
+  }
+  if (state.waveformUrl) {
+    try {
+      return new URL(state.waveformUrl).pathname.slice(-40);
+    } catch (e) { /* ignore */ }
+  }
+  return 'unknown';
+}
+
 // Кешована тривалість відео (оновлюється при аналізі через updateCachedVideoDuration)
 var _cachedVideoDuration = 0;
 
@@ -242,10 +269,19 @@ function fromTimecode(tc) {
   if (!parts.length || parts.some(n => isNaN(n))) return null;
 
   let h = 0, m = 0, s = 0, f = 0;
-  if (parts.length === 4) [h, m, s, f] = parts;
-  else if (parts.length === 3) [m, s, f] = parts; // наш формат без годин: ХХ:СС:КК
-  else if (parts.length === 2) [m, s] = parts;
-  else return null;
+  if (parts.length === 4) {
+    [h, m, s, f] = parts;
+  } else if (parts.length === 3) {
+    if (parts[2] >= 25) {
+      [h, m, s] = parts; // H:MM:SS (секунди не можуть бути кадром 25fps)
+    } else {
+      [m, s, f] = parts; // наш формат без годин: ХХ:СС:КК
+    }
+  } else if (parts.length === 2) {
+    [m, s] = parts;
+  } else {
+    return null;
+  }
 
   return h * 3600 + m * 60 + s + f / 25;
 }
@@ -336,6 +372,7 @@ function readSettings() {
     CONFIG.autoGap = document.getElementById('mra-auto-gap')?.checked ?? true;
     CONFIG.autoSaveAfterInsert = document.getElementById('mra-autosave')?.checked ?? true;
     CONFIG.fullAutoInsert = document.getElementById('mra-full-auto')?.checked ?? false;
+    CONFIG.preserveManualMarks = document.getElementById('mra-preserve-manual')?.checked ?? false;
     // Авто-пілот керує цими параметрами сам; ручні значення діють лише коли він вимкнений
     if (CONFIG.autoGap) {
       CONFIG.guaranteeStandard = true;
@@ -365,7 +402,7 @@ function readSettings() {
 // ─── ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ НАЛАШТУВАНЬ ───────────────────────────────────
 var SETTINGS_KEYS = ['autoOpenPanel', 'minSilenceSec', 'silenceThresholdPct', 'focusStart', 'autoGap',
   'minGapSec', 'shortVideoCutoff', 'longVideoGapSec', 'shortVideoGapSec', 'autoSaveAfterInsert', 'guaranteeStandard',
-  'rhythmFlexPct', 'minQualityPct', 'startOffsetSec', 'endOffsetSec', 'fullAutoInsert'];
+  'rhythmFlexPct', 'minQualityPct', 'startOffsetSec', 'endOffsetSec', 'fullAutoInsert', 'preserveManualMarks'];
 
 function saveSettings() {
   try {
@@ -553,6 +590,7 @@ function resetSettings() {
     focusStart: true,
     autoSaveAfterInsert: true,
     fullAutoInsert: false,
+    preserveManualMarks: false,
   };
   Object.assign(CONFIG, defaults);
   try {

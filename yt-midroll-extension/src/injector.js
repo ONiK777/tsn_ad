@@ -1,19 +1,5 @@
 // ─── ПЕРЕХОПЛЕННЯ API ЧЕРЕЗ INJECT.JS ────────────────────────────────────────
-function injectScript() {
-  const script = document.createElement('script');
-  script.src = chrome.runtime.getURL('inject.js');
-  script.onload = function () { this.remove(); };
-  (document.head || document.documentElement).appendChild(script);
-}
-
-if (document.head || document.documentElement) {
-  injectScript();
-} else {
-  const earlyObs = new MutationObserver(() => {
-    if (document.head || document.documentElement) { earlyObs.disconnect(); injectScript(); }
-  });
-  earlyObs.observe(document, { childList: true, subtree: true });
-}
+// inject.js тепер підключається через manifest.json (world: MAIN, run_at: document_start)
 
 function _onInterceptMessage(event) {
   try {
@@ -57,6 +43,9 @@ function _onInterceptMessage(event) {
       state.waveformOffsetSec = 0;
       state.silences = [];
       state.selected = [];
+      state.analysisMeta = null;
+      state.existingMarks = [];
+      state.ytAutoMarks = [];
       state.interceptedDuration = null;
       state.ytAdHintsRaw = null;
       state.ytHintsSec = null;

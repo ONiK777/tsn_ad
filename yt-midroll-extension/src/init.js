@@ -36,7 +36,10 @@ function init() {
         }
       } else if (!isAdBreaksPage) {
         const panel = document.getElementById('mra-panel');
-        if (panel) panel.remove();
+        if (panel) {
+          if (typeof cleanupPanel === 'function') cleanupPanel();
+          panel.remove();
+        }
         const btn = document.getElementById('mra-reopen-btn');
         if (btn) btn.remove();
       }

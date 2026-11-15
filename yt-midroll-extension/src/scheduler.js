@@ -12,8 +12,19 @@
   // ── Перевіряємо прапор одразу при завантаженні сторінки ──
   function checkPendingLaunch() {
     if (window.mraLaunchInProgress) return;
-    chrome.storage.local.get('pendingLaunch', (data) => {
+    chrome.storage.local.get(['pendingLaunch', 'pendingLaunchTs'], (data) => {
       if (!data.pendingLaunch) return;
+
+      // TTL 10 хв: без нього прапор без мітки часу міг лишитись True назавжди,
+      // якщо доставка повідомлення провалилась — і тоді наступне відкриття будь-якої
+      // сторінки Studio несподівано запускало б пошук Go Live.
+      const TTL_MS = 10 * 60 * 1000;
+      if (!data.pendingLaunchTs || (Date.now() - data.pendingLaunchTs) > TTL_MS) {
+        console.log('[TSN MANAGER] ⏳ pendingLaunch прапор застарів (TTL 10 хв) — ігнорую й скидаю.');
+        chrome.storage.local.set({ pendingLaunch: false });
+        return;
+      }
+
       window.mraLaunchInProgress = true;
 
       const url = window.location.href;
@@ -97,8 +108,10 @@
       showOverlay('🔴 Шукаємо кнопку Go Live...', 'info');
       waitForGoLiveButton(20, 1500);
     } else {
-      // Інша сторінка Studio — переходимо на manage
-      chrome.storage.local.set({ pendingLaunch: true });
+      // Інша сторінка Studio — переходимо на manage.
+      // pendingLaunchTs обов'язковий: без мітки часу TTL-перевірка в checkPendingLaunch
+      // скине прапор після перезавантаження і запуск не відбудеться.
+      chrome.storage.local.set({ pendingLaunch: true, pendingLaunchTs: Date.now() });
       window.location.href = 'https://studio.youtube.com/livestreaming/manage';
     }
 
@@ -138,7 +151,7 @@
     const link = findStreamLink(targetRow);
 
     // Підстраховка на випадок повного перезавантаження
-    chrome.storage.local.set({ pendingLaunch: true });
+    chrome.storage.local.set({ pendingLaunch: true, pendingLaunchTs: Date.now() });
 
     if (link) {
       console.log('[TSN MANAGER] Clicking stream link for SPA routing...');

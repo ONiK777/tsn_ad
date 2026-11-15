@@ -62,7 +62,9 @@ function renderSelectedList() {
       idealAds = 1;
     }
 
-    const actualAds = state.selected.length;
+    const totalAds = state.selected.length;
+    const ytFromAds = state.selected.filter(s => s.fromYt).length;
+    const existingAds = state.selected.filter(s => s.fromExisting).length;
 
     let ratioEmoji = '✅ Люкс';
     let ratioColor = '#00ff66';
@@ -70,14 +72,14 @@ function renderSelectedList() {
     if (duration < 480) {
       ratioEmoji = '⏳ До 8 хв (Без реклами)';
       ratioColor = '#94a3b8';
-    } else if (actualAds === 0) {
+    } else if (totalAds === 0) {
       ratioEmoji = '❌ Немає';
       ratioColor = '#ff0055';
-    } else if (actualAds < idealAds) {
+    } else if (totalAds < idealAds) {
       // Суворе правило: якщо менше ділення на 2 — значить погано (мало)
       ratioEmoji = '⚠️ Малувато';
       ratioColor = '#ff9f43';
-    } else if (actualAds > idealAds + 2) {
+    } else if (totalAds > idealAds + 2) {
       // Якщо напхали на 3 реклами більше ідеалу
       ratioEmoji = '🔥 Густо';
       ratioColor = '#ff0055';
@@ -87,10 +89,16 @@ function renderSelectedList() {
     const sec = Math.floor(duration % 60);
     const durStr = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 
+    const notes = [];
+    if (ytFromAds > 0) notes.push(`${ytFromAds} від YT`);
+    if (existingAds > 0) notes.push(`${existingAds} збережених`);
+    const notesStr = notes.length > 0
+      ? ` <span style="font-size:10px;color:#666;">(${notes.join(', ')})</span>`
+      : '';
     stats.innerHTML = `
       <span style="color:#888;" title="Хронометраж відео">⏱️ ${durStr}</span>
       &nbsp;|&nbsp;
-      <span style="color:#ccc;">Міт.: <b style="color:#fff">${actualAds}</b> <span style="font-size:10px;color:#666;" title="Ідеальна кількість реклам для такого хронометражу">(ідеал ~${idealAds})</span></span> 
+      <span style="color:#ccc;">Міт.: <b style="color:#fff">${totalAds}</b>${notesStr} <span style="font-size:10px;color:#666;" title="Ідеальна кількість реклам для такого хронометражу">(ідеал ~${idealAds})</span></span>
       &nbsp;|&nbsp;
       <span style="color:${ratioColor};" title="Статус щільності реклами">${ratioEmoji}</span>
     `;
@@ -110,7 +118,7 @@ function renderSelectedList() {
       stats.classList.add('mra-pulse-yellow');
     } else {
       // ✅ Люкс — одноразовий подвійний спалах через animate()
-      if (lastStatsAdCount !== actualAds) {
+      if (lastStatsAdCount !== totalAds) {
         try {
           stats.animate([
             { boxShadow: '0 0 0px transparent', borderColor: '#333' },
@@ -123,7 +131,7 @@ function renderSelectedList() {
       }
     }
 
-    lastStatsAdCount = actualAds;
+    lastStatsAdCount = totalAds;
   } else if (stats) {
     stats.classList.remove('mra-pulse-red', 'mra-pulse-yellow', 'mra-visible');
   }
@@ -134,24 +142,38 @@ function renderSelectedList() {
     if (state.waveformData && state.waveformData.duration >= 480) {
       const dur = state.waveformData.duration;
       const ideal = Math.max(1, Math.floor(dur / 120));
-      const realAds = state.selected.filter(s => !s.fallbackSpot).length;
+      const ytAcceptThreshold = typeof getYtAcceptQuality === 'function' ? getYtAcceptQuality() : 0.6;
+      const realAds = state.selected.filter(s =>
+        !s.fallbackSpot && (s.fromYt || s.fromExisting || s.ytHint || Number(s.quality_score ?? 0) >= ytAcceptThreshold)
+      ).length;
       const backupAds = state.selected.length - realAds;
+      // Частка природних (включає fromYt, fromExisting, ytHint та якість >= порогу)
       const share = realAds / ideal;
 
       let v;
-      if (share >= 0.9) v = { t: 'ЛЮКС', c: '#00ff66', d: 'відео з природними паузами — реклама стане непомітно' };
-      else if (share >= 0.6) v = { t: 'ДОБРЕ', c: '#06d6a0', d: 'більшість міток у природних паузах' };
-      else if (share >= 0.3) v = { t: 'СКЛАДНИЙ МОНТАЖ', c: '#ff9f43', d: 'природних пауз мало — частина міток запасні' };
-      else v = { t: 'МОНТАЖ ВСТИК', c: '#ff0055', d: 'природних пауз майже немає — мітки в найтихіших місцях, YouTube може рідше показувати тут рекламу' };
+      if (share >= 0.9) {
+        v = { t: 'ЛЮКС', c: '#00ff66', d: 'відео з природними паузами — реклама стане непомітно' };
+      } else if (share >= 0.6) {
+        v = { t: 'ДОБРЕ', c: '#06d6a0', d: 'більшість міток у природних паузах' };
+      } else if (share >= 0.3) {
+        v = { t: 'СКЛАДНИЙ МОНТАЖ', c: '#ff9f43', d: 'природних пауз мало — частина міток запасні' };
+      } else {
+        v = { t: 'МОНТАЖ ВСТИК', c: '#ff0055', d: 'природних пауз майже немає — мітки в найтихіших місцях, YouTube може рідше показувати тут рекламу' };
+      }
 
       const meta = state.analysisMeta;
       const escTxt = meta && meta.escalated
         ? ` Бот сам підняв чутливість до ${meta.finalThr}% (пауза ≥${meta.finalMinS}с).`
         : '';
+      const ytFromAds2 = state.selected.filter(s => s.fromYt).length;
+      const existAds2 = state.selected.filter(s => s.fromExisting).length;
+      let notesTxt = '';
+      if (ytFromAds2 > 0) notesTxt += ` Якорів YT: <b style="color:#7dd3fc">${ytFromAds2}</b>.`;
+      if (existAds2 > 0) notesTxt += ` Збережених ручних: <b style="color:#38bdf8">${existAds2}</b>.`;
 
       verdictEl.style.display = 'block';
       verdictEl.style.borderLeftColor = v.c;
-      verdictEl.innerHTML = `<b style="color:${v.c};letter-spacing:0.5px;">${v.t}</b> — ${v.d}. Природних: <b style="color:#fff">${realAds}</b>, запасних: <b style="color:#ffd166">${backupAds}</b>, ціль: ${ideal}.${escTxt}`;
+      verdictEl.innerHTML = `<b style="color:${v.c};letter-spacing:0.5px;">${v.t}</b> — ${v.d}.${notesTxt} Природних: <b style="color:#fff">${realAds}</b>, запасних: <b style="color:#ffd166">${backupAds}</b>, ціль: ${ideal}.${escTxt}`;
     } else {
       verdictEl.style.display = 'none';
     }
@@ -185,15 +207,23 @@ function renderSelectedList() {
     const durationLabel = durationSec > 0 ? `${durationSec.toFixed(1).replace('.0', '')}с` : '';
     durSpan.style.cssText = 'color:#94a3b8;font-size:10px;';
 
-    if (durationSec > 0) {
+    if (s.fromExisting) {
+      durSpan.textContent = '(ручна • збережена)';
+      durSpan.style.color = '#38bdf8';
+      durSpan.title = 'Збережена ручна мітка — не перезаписується';
+    } else if (s.fromYt) {
+      durSpan.textContent = '(YT • 100%)';
+      durSpan.style.color = '#7dd3fc';
+      durSpan.title = 'Якір YouTube — 100%-прийнята позиція авто-мітки YT';
+    } else if (durationSec > 0) {
       const quality = Number(s.quality_score);
       const qualityLabel = Number.isFinite(quality) ? ` · ${Math.round(quality * 100)}%` : '';
       durSpan.textContent = `(пауза ${durationLabel}${qualityLabel})`;
       durSpan.title = 'Якість паузи: глибина і рівність тиші + відсутність сплесків + довжина';
     } else if (s.fallbackSpot) {
       const quietness = Number(s.quality_score);
-      durSpan.textContent = Number.isFinite(quietness) ? `(тихіше середнього на ${Math.round(quietness * 100)}%)` : '';
-      durSpan.title = 'Чистої паузи тут немає. Показує, наскільки це місце тихіше за середню гучність відео — чим більше, тим непомітніше вріжеться реклама';
+      durSpan.textContent = Number.isFinite(quietness) ? `(якість місця ${Math.round(quietness * 100)}%)` : '';
+      durSpan.title = 'Чистої паузи тут немає — запасна мітка в найтихішому місці. Якість рахується тією ж шкалою, що й у природних пауз: глибина тиші + відсутність сплесків + довжина';
     } else {
       durSpan.textContent = '';
     }
@@ -233,7 +263,7 @@ function renderSelectedList() {
     list.appendChild(item);
   });
   const insertBtn = document.getElementById('mra-insert');
-  if (insertBtn) insertBtn.disabled = state.selected.length === 0;
+  if (insertBtn) insertBtn.disabled = state.selected.length === 0 || !state.selected.some(s => !s.inserted);
 }
 
 // ─── ВІЗУАЛІЗАЦІЯ ВЕЙВФОРМИ ───────────────────────────────────────────────────
@@ -508,7 +538,9 @@ function renderWaveform() {
   // ── Жовті вертикалі: паузи, куди ще можна поставити вручну ──
   if (state.waveformManualHints !== false) {
     state.silences.forEach(s => {
-      const alreadySelected = state.selected.some(sel => Math.abs(sel.seconds - s.seconds) < 1);
+      const alreadySelected = state.selected.some(sel => Math.abs(sel.seconds - s.seconds) < 1)
+        || (Array.isArray(state.existingMarks) && state.existingMarks.some(m => Math.abs(m.seconds - s.seconds) < 1))
+        || (Array.isArray(state.ytAutoMarks) && state.ytAutoMarks.some(m => Math.abs(m.seconds - s.seconds) < 1));
       if (alreadySelected) return;
       if (!isTimeVisible(s.seconds)) return;
 
@@ -539,6 +571,31 @@ function renderWaveform() {
 
       ctx.globalAlpha = Math.min(0.55, 0.2 + quality * 0.28);
       ctx.fillRect(sx - 3, h - 9, 6, 2);
+      ctx.restore();
+    });
+  }
+
+  // ── Наявні мітки (вже стоять на відео — блакитні вертикалі) ──
+  // Відображаємо об'єднання ручних і авто-міток YT (інформаційно: «що зараз стоїть на відео»)
+  const allCurrentMarks = [
+    ...(Array.isArray(state.existingMarks) ? state.existingMarks : []),
+    ...(Array.isArray(state.ytAutoMarks) ? state.ytAutoMarks : [])
+  ];
+  if (allCurrentMarks.length > 0) {
+    allCurrentMarks.forEach(m => {
+      if (!isTimeVisible(m.seconds)) return;
+      // Якщо поруч є вибрана мітка (в межах 1с) — вибрана візуально перемагає
+      if (state.selected.some(sel => Math.abs(sel.seconds - m.seconds) < 1)) return;
+      const ex = timeToX(m.seconds);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(ex, 1);
+      ctx.lineTo(ex, h - 5);
+      ctx.stroke();
+      ctx.setLineDash([]);
       ctx.restore();
     });
   }
