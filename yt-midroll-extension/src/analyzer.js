@@ -1663,6 +1663,30 @@ function getAdBreakDeleteButtons() {
   return [...new Set(btns)];
 }
 
+async function deleteAllExistingAdBreaks() {
+  let delBtns = getAdBreakDeleteButtons();
+  if (delBtns.length === 0) return 0;
+  const totalToDelete = delBtns.length;
+  log(`🗑️ Прибираю ${totalToDelete} старих міток...`, 'info');
+  let attempts = 0;
+  let deleted = 0;
+  while (attempts < totalToDelete * 2 + 10) {
+    delBtns = getAdBreakDeleteButtons();
+    if (delBtns.length === 0) break;
+    const beforeCount = delBtns.length;
+    delBtns[delBtns.length - 1].click();
+    attempts++;
+    await waitFor(() => getAdBreakDeleteButtons().length < beforeCount || findConfirmButton(), 1200);
+    if (findConfirmButton()) {
+      log('⚙️ Підтверджую діалог при видаленні авто-мітки...', 'info');
+      await confirmOpenModalIfAny(500);
+      await waitFor(() => getAdBreakDeleteButtons().length < beforeCount, 1200);
+    }
+    if (getAdBreakDeleteButtons().length < beforeCount) deleted++;
+  }
+  return deleted;
+}
+
 // ─── ПЕРЕВІРКА МІТОК ЧЕРЕЗ ОЦІНКУ YOUTUBE ────────────────────────────────────
 // YouTube сам позначає мітки поза "природними паузами" попередженням
 // "У цьому місці реклама навряд чи показуватиметься". Зчитуємо його вердикт
@@ -2169,30 +2193,12 @@ async function insertTimecodes() {
   try {
     // YouTube вміє підмішувати власні «автоматичні рекламні місця» поруч із нашими —
     // вимикаємо чекбокс, щоб розстановкою керував лише бот (бойовий кейс: дубль за 6с).
-    const autoAdsCb = findAutoAdsCheckbox();
-    if (autoAdsCb && autoAdsCb.getAttribute('aria-checked') === 'true') {
-      log('⚙️ Вимикаю «Автоматичні рекламні місця» YouTube — мітки ставить лише бот', 'info');
-      autoAdsCb.click();
-      await sleep(400);
-    }
+    await ensureAutoAdsDisabled();
 
     // Зносимо ВСІ мітки, що лишились (якщо не увімкнено збереження ручних міток).
     // При CONFIG.preserveManualMarks ручні мітки залишаються і нові просто доставляються у прогалини.
     if (!CONFIG.preserveManualMarks || !state.existingMarks || state.existingMarks.length === 0) {
-      let delBtns = getAdBreakDeleteButtons();
-      if (delBtns.length > 0) {
-        log(`🗑️ Прибираю ${delBtns.length} старих міток — план ставиться з нуля`, 'info');
-        let deleted = 0; const totalToDelete = delBtns.length;
-        while (true) {
-          delBtns = getAdBreakDeleteButtons();
-          if (delBtns.length === 0) break;
-          const beforeCount = delBtns.length;
-          delBtns[delBtns.length - 1].click();
-          deleted++;
-          await waitFor(() => getAdBreakDeleteButtons().length < beforeCount, 1200);
-          if (deleted > totalToDelete + 10) break;
-        }
-      }
+      await deleteAllExistingAdBreaks();
     } else {
       log(`🛡️ Зберігаємо ${state.existingMarks.length} існуючих ручних міток — старі мітки не видаляються`, 'info');
     }
@@ -2271,6 +2277,7 @@ async function insertTimecodes() {
         const confirmBtn = findConfirmButton();
         if (confirmBtn) {
           confirmBtn.click();
+          await waitFor(() => !findConfirmButton(), 2000, 100);
           appeared = await waitFor(() => getAdBreakDeleteButtons().length > deleteBtnsBefore.length, 2500);
         }
         if (!appeared) throw new Error('Рядок мітки не з\'явився у списку');

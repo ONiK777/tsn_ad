@@ -172,29 +172,141 @@ function findInsertAdBreakButton() {
 
 function findConfirmButton() {
   // Шукаємо тільки у ВИДИМИХ діалогах (не в прихованих/закритих)
-  const dialogs = document.querySelectorAll('ytcp-dialog, .ytcp-dialog');
+  const dialogSelectors = 'ytcp-dialog, .ytcp-dialog, ytcp-confirmation-dialog, tp-yt-paper-dialog';
+  const dialogs = document.querySelectorAll(dialogSelectors);
+  const cancelWords = ['скасувати', 'cancel', 'отмена', 'відмінити'];
+  const tokenMatches = ['ok', 'ок', 'так', 'yes', 'добре'];
+  const stringMatches = ['гаразд', 'confirm', 'підтвердити', 'вимкнути', 'turn off'];
+
   for (const dialog of dialogs) {
-    if (dialog.hasAttribute('hidden') || dialog.style.display === 'none' || dialog.getBoundingClientRect().width === 0) continue;
-    for (const btn of dialog.querySelectorAll('button')) {
-      if (btn.getBoundingClientRect().width === 0) continue; // Пропускаємо невидимі кнопки
-      const t = btn.textContent?.toLowerCase() || '';
-      if (['ok', 'confirm', 'підтвердити'].some(v => t.includes(v))) return btn;
+    if (
+      dialog.hasAttribute('hidden') ||
+      dialog.getAttribute('aria-hidden') === 'true' ||
+      dialog.style.display === 'none' ||
+      dialog.getBoundingClientRect().width === 0
+    ) {
+      continue;
+    }
+
+    const clickableButtons = [];
+    const visited = new Set();
+
+    const collectButtons = (root) => {
+      if (!root || visited.has(root)) return;
+      visited.add(root);
+
+      if (root.shadowRoot) {
+        collectButtons(root.shadowRoot);
+      }
+
+      const elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of elements) {
+        if (el.shadowRoot) {
+          collectButtons(el.shadowRoot);
+        }
+        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (tag === 'button' || tag === 'ytcp-button') {
+          const rect = el.getBoundingClientRect();
+          if (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            !el.disabled &&
+            !el.hasAttribute('disabled') &&
+            el.getAttribute('aria-disabled') !== 'true'
+          ) {
+            clickableButtons.push(el);
+          }
+        }
+      }
+    };
+
+    collectButtons(dialog);
+
+    let fallbackBtn = null;
+
+    for (const btn of clickableButtons) {
+      const rawText = (btn.getAttribute('aria-label') || '') + ' ' + (btn.textContent || '');
+      const norm = rawText.replace(/\s+/g, ' ').trim().toLowerCase();
+
+      // Пропускаємо кнопки скасування
+      if (cancelWords.some(w => norm.includes(w))) continue;
+
+      const tokens = norm.split(/[^a-zа-яіїєґ0-9]+/i).filter(Boolean);
+      const isTokenMatch = tokens.some(t => tokenMatches.includes(t));
+      const isStringMatch = stringMatches.some(s => norm.includes(s));
+
+      if (isTokenMatch || isStringMatch) {
+        return btn;
+      }
+
+      if (!fallbackBtn) {
+        const isDialogConfirm =
+          (btn.closest && btn.closest('[dialog-confirm]')) ||
+          btn.hasAttribute('dialog-confirm') ||
+          (btn.getRootNode && btn.getRootNode().host?.closest && btn.getRootNode().host.closest('[dialog-confirm]'));
+        if (isDialogConfirm) {
+          fallbackBtn = btn;
+        }
+      }
+    }
+
+    if (fallbackBtn) {
+      return fallbackBtn;
     }
   }
+
   return null;
 }
 
 // Пошук чекбокса автоматичних рекламних місць YouTube (мультимовний)
 function findAutoAdsCheckbox() {
-  const candidates = document.querySelectorAll('div[role="checkbox"], ytcp-checkbox-lit, tp-yt-paper-checkbox');
+  const candidates = document.querySelectorAll('div[role="checkbox"], div[role="switch"], ytcp-checkbox-lit, tp-yt-paper-checkbox');
   const pattern = /автоматичн.*реклам|automatic ad break|автоматическ.*реклам/i;
   for (const el of candidates) {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) continue;
-    const label = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '');
+    const shadowLabel = el.shadowRoot?.querySelector('[role="checkbox"], [role="switch"]')?.getAttribute('aria-label') || '';
+    const label = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '') + ' ' + shadowLabel;
     if (pattern.test(label)) return el;
   }
   return document.querySelector('div[role="checkbox"][aria-label*="Автоматичні рекламні"]');
+}
+
+function isAutoAdsChecked(cb) {
+  if (!cb) return false;
+  return (
+    cb.getAttribute('aria-checked') === 'true' ||
+    cb.checked === true ||
+    cb.hasAttribute('checked') ||
+    cb.shadowRoot?.querySelector('[role="checkbox"], [role="switch"]')?.getAttribute('aria-checked') === 'true'
+  );
+}
+
+async function confirmOpenModalIfAny(timeoutMs = 1500) {
+  const btn = await waitFor(() => findConfirmButton(), timeoutMs, 100);
+  if (!btn) return false;
+  btn.click();
+  await waitFor(() => !findConfirmButton(), 2000, 100);
+  await sleep(200);
+  return true;
+}
+
+async function ensureAutoAdsDisabled() {
+  if (findConfirmButton()) {
+    log('⚙️ Підтверджую вже відкритий діалог вимкнення авто-міток...', 'info');
+    await confirmOpenModalIfAny(500);
+  }
+  const cb = findAutoAdsCheckbox();
+  if (!cb || !isAutoAdsChecked(cb)) return false;
+  log('⚙️ Вимикаю «Автоматичні рекламні місця» YouTube — далі керує бот', 'info');
+  cb.click();
+  const confirmed = await confirmOpenModalIfAny(1500);
+  if (confirmed) {
+    log('✅ Підтверджено вимкнення автоматичних рекламних місць', 'success');
+  } else {
+    await sleep(300);
+  }
+  return true;
 }
 
 // Стабільний ідентифікатор поточного відео (без підписаних параметрів запиту)

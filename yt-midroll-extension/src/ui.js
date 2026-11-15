@@ -1086,35 +1086,14 @@ function createPanel() {
   document.getElementById('mra-clear').addEventListener('click', async () => {
     updateStatus('🗑️ Очищення міток...', 'info');
 
-    const autoAdsCheckbox = findAutoAdsCheckbox();
-    if (autoAdsCheckbox && (autoAdsCheckbox.getAttribute('aria-checked') === 'true' || autoAdsCheckbox.checked)) {
-      log('⚙️ Вимикаємо "Автоматичні рекламні місця" від YouTube...', 'info');
-      autoAdsCheckbox.click();
-      await sleep(400);
-    }
-
-    let deleteBtns = getAdBreakDeleteButtons();
-
+    await ensureAutoAdsDisabled();
+    const deleteBtns = getAdBreakDeleteButtons();
     if (deleteBtns.length === 0) {
       log('Не знайдено міток для видалення', 'warn');
       updateStatus('Не знайдено міток', 'warn');
       return;
     }
-
-    const totalToDelete = deleteBtns.length;
-    log(`Видаляємо ${totalToDelete} міток з відео...`, 'info');
-    let deleted = 0;
-    while (true) {
-      deleteBtns = getAdBreakDeleteButtons();
-      if (deleteBtns.length === 0) break;
-      const beforeCount = deleteBtns.length;
-      deleteBtns[deleteBtns.length - 1].click();
-      deleted++;
-      // Чекаємо ФАКТ зникнення рядка — без перекліків по тій самій кнопці
-      await waitFor(() => getAdBreakDeleteButtons().length < beforeCount, 1200);
-      if (deleted > totalToDelete + 10) break;
-    }
-
+    await deleteAllExistingAdBreaks();
     updateStatus('🗑️ Всі реклами успішно видалено!', 'success');
   });
 
